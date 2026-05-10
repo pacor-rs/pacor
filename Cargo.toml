@@ -1,0 +1,71 @@
+[package]
+name = "pacor"
+authors = ["thep0y"]
+version = "0.1.0"
+description = "Cross-platform packaging tool for Flutter applications."
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", default-features = false, features = ["derive"] }
+toml = { version = "1", default-features = false, features = [
+    "display",
+    "serde",
+    "parse",
+] }
+serde_yaml = { version = "0", default-features = false, features = [] }
+thiserror = { version = "2", default-features = false, features = [] }
+clap = { version = "4", default-features = false, features = [
+    "derive",
+    "std",
+    "help",
+    "usage",
+] }
+colored = { version = "3", default-features = false, features = [] }
+sha1 = { version = "0", default-features = false, features = ["std"] }
+tracing = { version = "0", default-features = false, features = [
+    "release_max_level_debug",
+] }
+tracing-subscriber = { version = "0", default-features = false, features = [
+    "fmt",
+    "env-filter",
+] }
+dirs = { version = "6", default-features = false, features = [] }
+tempfile = { version = "3", default-features = false, features = ["getrandom"] }
+
+[target."cfg(any(target_os = \"windows\", target_os = \"linux\"))".dependencies]
+ureq = { version = "3", default-features = false, features = ["native-tls"] }
+walkdir = { version = "2", default-features = false, features = [] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
+
+[target."cfg(any(target_os = \"macos\", target_os = \"linux\"))".dependencies]
+flate2 = { version = "1", default-features = false, features = ["zlib"] }
+tar = { version = "0", default-features = false }
+
+[target."cfg(target_os = \"linux\")".dependencies]
+md5 = { version = "0", default-features = false, features = ["std"] }
+ar = { version = "0", default-features = false, features = [] }
+
+[target."cfg(any(target_os = \"windows\", target_os = \"linux\"))".dev-dependencies]
+temp-env = "0"
+
+[[bin]]
+name = "pacor"
+path = "src/main.rs"
+
+[lib]
+doctest = false
+
+[features]
+log-line-number = []
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+incremental = false
+opt-level = "z"          # z level is the smallest
+strip = true
+debug = false
+debug-assertions = false
+overflow-checks = false
