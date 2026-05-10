@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read
+      contents: read
     outputs:
       core: ${{ steps.changes.outputs.core }}
       workflow: ${{ steps.changes.outputs.workflow }}
