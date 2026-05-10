@@ -17,6 +17,10 @@
       "labels": ["dependencies"]
     },
     {
+      "title": "## 🤖 Workflows",
+      "labels": ["ci"]
+    },
+    {
       "title": "## ⚡ Performance Improvements",
       "labels": ["perf"]
     },
