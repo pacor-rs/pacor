@@ -7,6 +7,7 @@ use anyhow::Result;
 
 use crate::{
     cli::args::CommandOutputMode,
+    core::arch::Arch,
     utils::command::macros::{command_args, command_args_push},
 };
 use crate::{
@@ -66,10 +67,11 @@ impl BundleBuilder for AndroidBuilder {
             .into());
         }
 
+        let arch = Arch::current()?;
         let project_root = find_flutter_project_root()?;
         let flutter_project = FlutterProject::load_from_pubspec(&project_root)?;
         let flutter_build_path =
-            flutter_project.get_flutter_build_path(&project_root, super::Platform::Android);
+            flutter_project.get_flutter_build_path(&project_root, super::Platform::Android, &arch);
         let output_directory = config.output_dir()?;
 
         Ok(Self {

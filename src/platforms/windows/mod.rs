@@ -87,12 +87,13 @@ impl<'a> BundleBuilder for WindowsBuilder<'a> {
             .into());
         }
 
+        let arch = Arch::current()?;
+
         let project_root = find_flutter_project_root()?;
         let flutter_project = FlutterProject::load_from_pubspec(&project_root)?;
         let flutter_build_output_dir =
-            flutter_project.get_flutter_build_path(&project_root, Platform::Windows);
+            flutter_project.get_flutter_build_path(&project_root, Platform::Windows, &arch);
 
-        let arch = Arch::current()?;
         let output_directory = config.output_dir()?;
 
         let tools_dir = dirs::config_dir()

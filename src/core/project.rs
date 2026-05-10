@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     cli::args::CommandOutputMode,
+    core::arch::Arch,
     error::{ConfigurationError, ProjectError, ValidationError},
     platforms::Platform,
     utils::command::{execute_command, flutter_executable},
@@ -46,15 +47,21 @@ impl FlutterProject {
         &self,
         project_root: &Path,
         platform: Platform,
+        arch: &Arch,
     ) -> PathBuf {
         match platform {
             Platform::Android => project_root.join("build/app/outputs/flutter-apk"),
             #[cfg(target_os = "linux")]
-            Platform::Linux => project_root.join("build/linux/x64/release/bundle"),
+            Platform::Linux => {
+                project_root.join(format!("build/linux/{}/release/bundle", arch.as_str()))
+            }
             #[cfg(target_os = "macos")]
             Platform::MacOS => project_root.join("build/macos/Build/Products/Release"),
             #[cfg(target_os = "windows")]
-            Platform::Windows => project_root.join("build\\windows\\x64\\runner\\Release"),
+            Platform::Windows => project_root.join(format!(
+                "build\\windows\\{}\\runner\\Release",
+                arch.as_str()
+            )),
         }
     }
 
