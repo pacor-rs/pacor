@@ -1,0 +1,108 @@
+name: "PR Check"
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/pr-check.yml"
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  detect-changes:
+    name: "Detect Changes"
+    runs-on: ubuntu-latest
+    outputs:
+      core: ${{ steps.changes.outputs.core }}
+      workflow: ${{ steps.changes.outputs.workflow }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v4
+        id: changes
+        with:
+          filters: |
+            core:
+              - 'src/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+            workflow:
+              - '.github/workflows/**'
+
+  core-check:
+    name: "Rust Code Check"
+    needs: detect-changes
+    if: needs.detect-changes.outputs.core == 'true' || needs.detect-changes.outputs.workflow == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: "macos-latest"
+            args: "--target aarch64-apple-darwin"
+            rust-target: "aarch64-apple-darwin"
+          - platform: "macos-latest"
+            args: "--target x86_64-apple-darwin"
+            rust-target: "x86_64-apple-darwin"
+          - platform: "ubuntu-latest"
+            args: ""
+            rust-target: "x86_64-unknown-linux-gnu"
+          - platform: "windows-latest"
+            args: ""
+            rust-target: "x86_64-pc-windows-msvc"
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/release/deps
+            target/release/build
+            target/${{ matrix.rust-target }}/release/deps
+            target/${{ matrix.rust-target }}/release/build
+          key: ${{ runner.os }}-${{ matrix.rust-target }}-rust-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.rust-target }}-rust-
+
+      - name: Cargo fmt check
+        run: cargo fmt --all -- --check
+
+      - name: Cargo clippy
+        run: cargo clippy --all-targets --target ${{ matrix.rust-target }} -- -D warnings
+
+      - name: Cargo test
+        run: cargo test --target ${{ matrix.rust-target }}
+
+      - name: Cargo build
+        run: cargo build --target ${{ matrix.rust-target }}
+
+  auto-merge:
+    name: "Auto Merge PR"
+    runs-on: ubuntu-latest
+    needs: [detect-changes, core-check]
+    if: always() && !cancelled() && !failure()
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Auto merge PR
+        uses: pascalgn/automerge-action@v0.16.4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MERGE_REMOVE_LABELS: "automerge"
