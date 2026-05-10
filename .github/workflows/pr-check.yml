@@ -18,11 +18,14 @@ jobs:
   detect-changes:
     name: "Detect Changes"
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
     outputs:
       core: ${{ steps.changes.outputs.core }}
       workflow: ${{ steps.changes.outputs.workflow }}
     steps:
       - uses: actions/checkout@v6
+
       - uses: dorny/paths-filter@v4
         id: changes
         with:
