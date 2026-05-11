@@ -14,7 +14,7 @@ use crate::{
         project::FlutterProject,
     },
     error::{BuildError, PlatformError},
-    platforms::{BuildArtifact, windows::nsis::generater::NSISGenerator},
+    platforms::{BuildArtifact, windows::nsis::generator::NSISGenerator},
     utils::{
         archive::extract_zip,
         command::{execute_command, find_command_path, macros::command_args},
@@ -23,7 +23,7 @@ use crate::{
     },
 };
 
-mod generater;
+mod generator;
 
 /// URL for downloading NSIS (Nullsoft Scriptable Install System)
 const NSIS_DOWNLOAD_URL: &str =
