@@ -38,7 +38,7 @@
 //!
 //! The builder system supports the following platforms:
 //! - **macOS**: Creates DMG and PKG installers
-//! - **Windows**: Creates MSI and NSIS installers  
+//! - **Windows**: Creates MSI and NSIS installers
 //! - **Linux**: Creates AppImage, DEB, and RPM packages
 //! - **Android**: Creates APK packages (cross-platform)
 //!
@@ -371,7 +371,7 @@ impl BuilderFactory {
     ///
     /// The Android builder can run on:
     /// - **macOS**: Full Android development environment
-    /// - **Linux**: Full Android development environment  
+    /// - **Linux**: Full Android development environment
     /// - **Windows**: Full Android development environment
     ///
     /// # Requirements
@@ -405,8 +405,9 @@ impl BuilderFactory {
     /// android_builder.validate()?;
     /// let apk_artifacts = android_builder.build(false, CommandOutputMode::Normal)?;
     /// ```
-    pub(crate) fn create_android() -> Result<crate::platforms::android::AndroidBuilder> {
-        let config = crate::config::PacorConfig::load()?;
+    pub(crate) fn create_android(
+        config: &PacorConfig,
+    ) -> Result<crate::platforms::android::AndroidBuilder<'_>> {
         crate::platforms::android::AndroidBuilder::new(config)
     }
 }
