@@ -6,7 +6,7 @@ use crate::error::PackageError;
 
 /// Only 64-bit architectures are mainstream for modern operating systems.
 /// 32-bit support has been deprecated, and this project does not maintain 32-bit versions.
-#[derive(Debug, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Arch {
     X64,
     ARM64,
@@ -39,5 +39,40 @@ impl AsRef<str> for Arch {
 impl Display for Arch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_arch_current() {
+        let result = Arch::current();
+        let arch = std::env::consts::ARCH;
+        if arch == "x86_64" {
+            assert_eq!(result.unwrap(), Arch::X64);
+        } else if arch == "aarch64" {
+            assert_eq!(result.unwrap(), Arch::ARM64);
+        } else {
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    fn test_arch_as_str() {
+        assert_eq!(Arch::X64.as_str(), "x64");
+        assert_eq!(Arch::ARM64.as_str(), "arm64");
+    }
+
+    #[test]
+    fn test_arch_display() {
+        assert_eq!(format!("{}", Arch::X64), "x64");
+        assert_eq!(format!("{}", Arch::ARM64), "arm64");
+    }
+
+    #[test]
+    fn test_arch_as_ref() {
+        assert_eq!(Arch::X64.as_ref(), "x64");
     }
 }
