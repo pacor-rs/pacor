@@ -34,21 +34,20 @@ mod abi;
 pub(crate) use abi::TargetAbi;
 
 /// Builder for Android platform bundles (APKs).
-pub(crate) struct AndroidBuilder {
-    /// Common builder functionality
+pub(crate) struct AndroidBuilder<'a> {
     common: CommonBuilderImpl,
     android_config: AndroidConfig,
     project_root: PathBuf,
     flutter_build_path: PathBuf,
     output_directory: PathBuf,
     flutter_project: FlutterProject,
+    _config: std::marker::PhantomData<&'a PacorConfig>,
 }
 
-impl BundleBuilder for AndroidBuilder {
-    type Config = PacorConfig;
+impl<'a> BundleBuilder for AndroidBuilder<'a> {
+    type Config = &'a PacorConfig;
     type Output = Vec<BuildArtifact>;
 
-    /// Creates a new `AndroidBuilder` instance from the provided bundle configuration.
     fn new(config: Self::Config) -> Result<Self> {
         let android_config = match &config.platforms.android {
             Some(android_config) => android_config.clone(),
@@ -81,6 +80,7 @@ impl BundleBuilder for AndroidBuilder {
             flutter_project,
             flutter_build_path,
             output_directory,
+            _config: std::marker::PhantomData,
         })
     }
 
@@ -149,7 +149,7 @@ impl BundleBuilder for AndroidBuilder {
     }
 }
 
-impl AndroidBuilder {
+impl AndroidBuilder<'_> {
     /// Builds the Android APK using Flutter CLI.
     fn build_apk(&self, command_output: &CommandOutputMode) -> Result<()> {
         let symbols_dir = tempfile::TempDir::with_prefix("pacor-flutter-symbols-")?;
@@ -207,25 +207,10 @@ impl AndroidBuilder {
 
             std::fs::copy(&source_apk_path, &target_apk_path)?;
 
-            // Sign APK if keystore configuration is provided
             if self.should_sign_apk() {
                 self.sign_apk(&target_apk_path)?;
             }
 
-            // Copy the corresponding SHA1 checksum file
-            let source_sha1_path = self
-                .flutter_build_path
-                .join(format!("{}.sha1", apk_filename));
-            let target_sha1_path = self.output_directory.join(format!(
-                "{}-{}-{}.apk.sha1",
-                self.flutter_project.name(),
-                self.flutter_project.version(),
-                target_abi,
-            ));
-
-            std::fs::copy(&source_sha1_path, &target_sha1_path)?;
-
-            // Use common artifact creation functionality
             let artifact = self.create_artifact_with_checksum(target_apk_path)?;
             output_files.push(artifact);
         }
@@ -241,12 +226,36 @@ impl AndroidBuilder {
     /// Signs the APK using the configured keystore.
     ///
     /// Note: This is currently a placeholder implementation.
-    fn sign_apk(&self, _apk_path: &Path) -> Result<()> {
+    fn sign_apk(&self, apk_path: &Path) -> Result<()> {
+        let keystore_file = self
+            .android_config
+            .keystore_file
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("keystore_file not configured"))?;
+        let keystore_password = self
+            .android_config
+            .keystore_password()
+            .ok_or_else(|| anyhow::anyhow!("keystore_password not configured"))?;
+        let key_alias = self
+            .android_config
+            .key_alias
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("key_alias not configured"))?;
+        let _key_password = self
+            .android_config
+            .key_password()
+            .ok_or_else(|| anyhow::anyhow!("key_password not configured"))?;
+
         // TODO: Implement APK signing using jarsigner or apksigner
-        warn!("APK signing functionality is not yet implemented");
+        warn!(
+            "APK signing not yet implemented: would sign {} with keystore {}",
+            apk_path.display(),
+            keystore_file
+        );
+        let _ = (keystore_password, key_alias);
         Ok(())
     }
 }
 
 // Use the macro to automatically implement all common traits
-crate::impl_common_builders!(AndroidBuilder, common);
+crate::impl_common_builders!(AndroidBuilder<'_>, common);
