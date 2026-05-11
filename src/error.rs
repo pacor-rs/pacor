@@ -63,6 +63,10 @@ pub enum PackageError {
     #[error("Directory traversal error: {0}")]
     DirectoryTraversal(#[from] walkdir::Error),
 
+    // Command execution errors
+    #[error("Command error: {0}")]
+    Command(#[from] CommandError),
+
     // Threading errors
     #[cfg(windows)]
     #[error("Threading error: {0}")]
@@ -125,8 +129,6 @@ pub enum BuildError {
     #[error("Build environment setup failed: {reason}")]
     EnvironmentSetupFailed { reason: String },
 
-    // #[error("Signing process failed: {reason}")]
-    // SigningFailed { reason: String },
     #[error("Template processing failed for {template}: {reason}")]
     TemplateProcessingFailed { template: String, reason: String },
 
@@ -155,8 +157,6 @@ pub enum PlatformError {
     #[cfg(target_os = "macos")]
     #[error("Invalid XCConfig format at line {line}: {content}")]
     InvalidXcconfigFormat { line: usize, content: String },
-    // #[error("Code signing failed for {platform}: {reason}")]
-    // CodeSigningFailed { platform: String, reason: String },
 }
 
 /// Validation errors for project and environment checks.
@@ -191,4 +191,64 @@ pub enum CommandError {
         command: OsString,
         exit_info: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_project_error_display() {
+        let err = ProjectError::RootNotFound;
+        assert!(err.to_string().contains("pubspec.yaml"));
+    }
+
+    #[test]
+    fn test_configuration_error_display() {
+        let err = ConfigurationError::MissingRequired {
+            field: "test_field".to_string(),
+        };
+        assert!(err.to_string().contains("test_field"));
+    }
+
+    #[test]
+    fn test_build_error_display() {
+        let err = BuildError::FlutterBuildFailed {
+            code: 1,
+            output: "error message".to_string(),
+        };
+        assert!(err.to_string().contains("1"));
+    }
+
+    #[test]
+    fn test_platform_error_display() {
+        let err = PlatformError::UnsupportedPlatform {
+            platform: "freebsd".to_string(),
+        };
+        assert!(err.to_string().contains("freebsd"));
+    }
+
+    #[test]
+    fn test_package_error_from_project() {
+        let err: PackageError = ProjectError::FlutterNotInstalled.into();
+        assert!(matches!(err, PackageError::Project(_)));
+    }
+
+    #[test]
+    fn test_package_error_from_command() {
+        let cmd_err = CommandError::Failed {
+            command: OsString::from("test"),
+            exit_info: "exit code 1".to_string(),
+        };
+        let err: PackageError = cmd_err.into();
+        assert!(matches!(err, PackageError::Command(_)));
+    }
+
+    #[test]
+    fn test_validation_error_display() {
+        let err = ValidationError::ProjectValidation {
+            reason: "bad project".to_string(),
+        };
+        assert!(err.to_string().contains("bad project"));
+    }
 }
