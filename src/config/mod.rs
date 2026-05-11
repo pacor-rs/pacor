@@ -37,7 +37,7 @@ pub(crate) use crate::config::linux::{DebianConfig, LinuxPackageFormat};
 #[cfg(target_os = "windows")]
 pub(crate) use crate::config::windows::InstallerFormat;
 pub(crate) use crate::config::{
-    android::AndroidConfig, app::AppConfig, build::BuildOptions, macos::MacOSBuildConfig,
+    android::AndroidConfig, app::AppConfig, build::{BuildOptions, FlutterBuildMode}, macos::MacOSBuildConfig,
     windows::WindowsConfig,
 };
 use crate::error::{ConfigurationError, PackageError, Result};
@@ -51,20 +51,10 @@ mod macos;
 mod windows;
 
 /// Platform configuration collection containing settings for all supported platforms.
-///
-/// Each platform configuration can be individually enabled or disabled,
-/// allowing for selective builds across different target platforms.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub(crate) struct PlatformsConfig {
-    /// macOS platform configuration (DMG, PKG)
     pub(crate) macos: Option<MacOSBuildConfig>,
-
-    /// Windows platform configuration (MSI, NSIS)
     pub(crate) windows: Option<WindowsConfig>,
-
-    // /// Linux platform configuration (AppImage, DEB, RPM)
-    // pub(crate) linux: Option<LinuxConfig>,
-    /// Android platform configuration (APK) - can be built from any host platform
     pub(crate) android: Option<AndroidConfig>,
 }
 
@@ -114,35 +104,9 @@ impl PacorConfig {
     pub(crate) fn load() -> Result<Self> {
         let mut manager = ConfigurationManager::new()?;
         let config = manager.load_merged_configuration()?;
-
-        // Validate the final merged configuration
         config.validate()?;
-
         Ok(config)
     }
-
-    // /// Load configuration with CLI argument overrides.
-    // ///
-    // /// This method extends the standard load() method by allowing CLI arguments
-    // /// to override configuration values. This provides the highest priority
-    // /// configuration source.
-    // ///
-    // /// # Arguments
-    // ///
-    // /// * `cli_overrides` - Optional CLI argument values to override configuration
-    // ///
-    // /// # Example
-    // ///
-    // /// ```rust
-    // /// let config = BundleConfig::load_with_overrides(Some(cli_args))?;
-    // /// ```
-    // pub(crate) fn load_with_overrides(
-    //     _cli_overrides: Option<&crate::cli::args::Cli>,
-    // ) -> Result<Self> {
-    //     // For now, we'll implement CLI overrides in a future iteration
-    //     // The infrastructure is in place in the layers module
-    //     Self::load()
-    // }
 
     /// Load configuration and return layer information for debugging
     ///
