@@ -39,3 +39,18 @@ pub(crate) enum Platform {
     #[cfg(target_os = "windows")]
     Windows,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_artifact_new() {
+        let artifact = BuildArtifact::new(
+            PathBuf::from("output/app.exe"),
+            PathBuf::from("output/app.exe.sha1"),
+        );
+        assert_eq!(artifact.file(), &PathBuf::from("output/app.exe"));
+        assert_eq!(artifact.sha1(), &PathBuf::from("output/app.exe.sha1"));
+    }
+}
