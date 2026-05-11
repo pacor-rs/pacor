@@ -3,8 +3,6 @@
 //! This module contains the core build orchestration logic that coordinates
 //! the build process across different platforms and manages the build lifecycle.
 
-use std::sync::Arc;
-
 use anyhow::Result;
 
 use crate::cli::args::CommandOutputMode;
@@ -16,14 +14,8 @@ use crate::platforms::BuildArtifact;
 use crate::utils::command::execute_flutter_clean_command;
 
 /// Orchestrates the build process across different platforms.
-///
-/// The BuildOrchestrator is responsible for:
-/// - Managing the build lifecycle
-/// - Coordinating platform-specific builders
-/// - Handling cleanup operations
-/// - Managing build artifacts
 pub(crate) struct BuildOrchestrator {
-    config: Arc<PacorConfig>,
+    config: PacorConfig,
     context: BuildContext,
 }
 
@@ -32,7 +24,7 @@ impl BuildOrchestrator {
     pub(crate) fn new(context: BuildContext) -> Result<Self> {
         let config = PacorConfig::load()?;
         Ok(Self {
-            config: Arc::new(config),
+            config,
             context,
         })
     }
@@ -41,11 +33,11 @@ impl BuildOrchestrator {
     pub(crate) fn from_config(config: PacorConfig) -> Result<Self> {
         let context = BuildContext::new(
             CommandOutputMode::Normal,
-            false, // use_existing_flutter_build
-            false, // skip_cleanup
+            false,
+            false,
         );
         Ok(Self {
-            config: Arc::new(config),
+            config,
             context,
         })
     }
@@ -60,19 +52,15 @@ impl BuildOrchestrator {
                 e
             })?;
 
-        // Validate build environment before proceeding
         self.validate_build_environment(&*platform_builder)?;
 
-        // Log build configuration
         self.log_build_configuration();
 
-        // Execute the build
         let build_outputs = platform_builder.build(
             self.context.use_existing_flutter_build,
             self.context.command_output.clone(),
         )?;
 
-        // Perform cleanup unless explicitly skipped
         if !self.context.skip_cleanup {
             self.cleanup_build_artifacts(&*platform_builder)?;
         }
@@ -90,18 +78,16 @@ impl BuildOrchestrator {
             should_sign_apk, self.context.use_existing_flutter_build
         );
 
-        let android_builder = BuilderFactory::create_android().map_err(|e| {
+        let android_builder = BuilderFactory::create_android(&self.config).map_err(|e| {
             error!("Failed to create android builder: {}", e);
             e
         })?;
 
-        // Validate Android build environment
         android_builder.validate().map_err(|e| {
             error!("Android build environment validation failed: {}", e);
             e
         })?;
 
-        // Execute the build
         let build_outputs = android_builder.build(
             self.context.use_existing_flutter_build,
             self.context.command_output.clone(),
