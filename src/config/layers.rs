@@ -47,8 +47,8 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
 use crate::config::{
-    AndroidConfig, AppConfig, BuildOptions, FlutterBuildMode, MacOSBuildConfig, PacorConfig, PlatformsConfig,
-    WindowsConfig,
+    AndroidConfig, AppConfig, BuildOptions, FlutterBuildMode, MacOSBuildConfig, PacorConfig,
+    PlatformsConfig, WindowsConfig,
 };
 use crate::core::project::find_flutter_project_root;
 use crate::error::{ConfigurationError, PackageError, Result};
@@ -533,9 +533,7 @@ impl ConfigurationManager {
         };
 
         let complete_build = BuildOptions {
-            flutter_build_mode: build_config
-                .flutter_build_mode
-                .unwrap_or_default(),
+            flutter_build_mode: build_config.flutter_build_mode.unwrap_or_default(),
             output_dir: build_config
                 .output_dir
                 .unwrap_or_else(|| "dist".to_string()),

@@ -61,10 +61,7 @@ mod tests {
 
         let checksum_path = generate_sha1_checksum_file(&file_path).unwrap();
         assert!(checksum_path.exists());
-        assert_eq!(
-            checksum_path.file_name().unwrap(),
-            "app.exe.sha1"
-        );
+        assert_eq!(checksum_path.file_name().unwrap(), "app.exe.sha1");
 
         let content = fs::read_to_string(&checksum_path).unwrap();
         assert!(!content.is_empty());

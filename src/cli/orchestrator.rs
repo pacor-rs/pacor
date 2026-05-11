@@ -23,23 +23,13 @@ impl BuildOrchestrator {
     /// Create a new build orchestrator with the provided context.
     pub(crate) fn new(context: BuildContext) -> Result<Self> {
         let config = PacorConfig::load()?;
-        Ok(Self {
-            config,
-            context,
-        })
+        Ok(Self { config, context })
     }
 
     /// Create a new build orchestrator from an existing configuration.
     pub(crate) fn from_config(config: PacorConfig) -> Result<Self> {
-        let context = BuildContext::new(
-            CommandOutputMode::Normal,
-            false,
-            false,
-        );
-        Ok(Self {
-            config,
-            context,
-        })
+        let context = BuildContext::new(CommandOutputMode::Normal, false, false);
+        Ok(Self { config, context })
     }
 
     /// Execute build for the current platform.

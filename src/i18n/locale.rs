@@ -67,7 +67,9 @@ mod tests {
     #[test]
     fn test_locale_eq_and_hash() {
         use std::collections::HashSet;
-        let set: HashSet<Locale> = [Locale::EnUs, Locale::ZhCn, Locale::EnUs].into_iter().collect();
+        let set: HashSet<Locale> = [Locale::EnUs, Locale::ZhCn, Locale::EnUs]
+            .into_iter()
+            .collect();
         assert_eq!(set.len(), 2);
     }
 

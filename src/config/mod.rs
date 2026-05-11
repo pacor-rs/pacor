@@ -37,7 +37,10 @@ pub(crate) use crate::config::linux::{DebianConfig, LinuxPackageFormat};
 #[cfg(target_os = "windows")]
 pub(crate) use crate::config::windows::InstallerFormat;
 pub(crate) use crate::config::{
-    android::AndroidConfig, app::AppConfig, build::{BuildOptions, FlutterBuildMode}, macos::MacOSBuildConfig,
+    android::AndroidConfig,
+    app::AppConfig,
+    build::{BuildOptions, FlutterBuildMode},
+    macos::MacOSBuildConfig,
     windows::WindowsConfig,
 };
 use crate::error::{ConfigurationError, PackageError, Result};
@@ -79,7 +82,7 @@ impl PacorConfig {
     ///
     /// This method uses the sophisticated layered configuration approach that supports:
     /// 1. Global default values
-    /// 2. Platform-specific defaults  
+    /// 2. Platform-specific defaults
     /// 3. User configuration file (pacor.toml)
     /// 4. Environment variable overrides (PACOR_*)
     /// 5. CLI argument overrides (when provided)
