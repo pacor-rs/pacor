@@ -52,13 +52,13 @@ impl OutputFormatter {
     }
 
     /// Display successful build completion message with output files.
-    pub(crate) fn display_build_success(&self, build_outputs: &[BuildArtifact]) {
+    pub(crate) fn display_build_success(&self, title: &str, build_outputs: &[BuildArtifact]) {
         if self.output_mode == CommandOutputMode::None {
             return;
         }
 
         println!();
-        self.print_section_header("Build Completed Successfully");
+        self.print_section_header(title);
 
         if build_outputs.is_empty() {
             println!("No output files generated");
@@ -73,30 +73,4 @@ impl OutputFormatter {
 
         info!("Build outputs displayed successfully");
     }
-
-    /// Display successful Android build completion with APK files.
-    pub(crate) fn display_android_build_success(&self, build_outputs: &[BuildArtifact]) {
-        if self.output_mode == CommandOutputMode::None {
-            return;
-        }
-
-        println!();
-        self.print_section_header("Android Build Completed Successfully");
-        println!("Output files:");
-
-        // Android builds typically produce APK and SHA1 checksum pairs
-        for build_artifact in build_outputs {
-            println!(" - {}", build_artifact.file().display().to_string().green());
-            println!(" - {}", build_artifact.sha1().display().to_string().green());
-        }
-
-        info!("Android build outputs displayed successfully");
-    }
-
-    // /// Display a key-value pair with consistent formatting.
-    // pub(crate) fn display_key_value(&self, key: &str, value: &str) {
-    //     if self.output_mode != CommandOutputMode::None {
-    //         println!("{}: {}", key.blue().bold(), value);
-    //     }
-    // }
 }

@@ -51,7 +51,7 @@ pub(crate) fn handle_build_command(context: BuildContext) -> Result<()> {
     let orchestrator = BuildOrchestrator::new(context)?;
     let build_outputs = orchestrator.execute_current_platform_build()?;
 
-    formatter.display_build_success(&build_outputs);
+    formatter.display_build_success("Build Completed Successfully", &build_outputs);
     Ok(())
 }
 
@@ -71,7 +71,7 @@ pub(crate) fn handle_android_command(context: BuildContext, should_sign_apk: boo
     let orchestrator = BuildOrchestrator::new(context)?;
     let build_outputs = orchestrator.execute_android_build(should_sign_apk)?;
 
-    formatter.display_android_build_success(&build_outputs);
+    formatter.display_build_success("Android Build Completed Successfully", &build_outputs);
     Ok(())
 }
 
@@ -296,7 +296,7 @@ fn validate_android_environment(config: &PacorConfig, formatter: &OutputFormatte
         return;
     }
 
-    match AndroidBuilder::new(config.clone()) {
+    match AndroidBuilder::new(config) {
         Ok(builder) => match builder.validate() {
             Ok(()) => {
                 formatter.display_success("✓ Android build environment is valid");
