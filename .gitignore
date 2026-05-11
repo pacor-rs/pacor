@@ -1,2 +1,6 @@
 target/
 tmp/
+
+/.arts
+/.codeartsdoer
+/test_*
