@@ -1,8 +1,7 @@
-//! Legacy CLI command execution (deprecated - being replaced by modular handlers).
+//! CLI command execution and dispatch.
 //!
-//! This module contains the original command execution logic and is being
-//! gradually refactored into separate handler modules for better maintainability.
-//! New code should use the handlers in `crate::cli::handlers` instead.
+//! This module serves as the entry point for CLI command execution,
+//! initializing logging and dispatching to appropriate command handlers.
 
 use anyhow::Result;
 use colored::Colorize;
