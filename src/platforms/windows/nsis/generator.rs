@@ -4,7 +4,7 @@ use std::{fs, io, thread};
 
 use anyhow::{Context, Result};
 
-use crate::error::{BuildError, PackageError};
+use crate::error::{BuildError, Error};
 use crate::utils::downloader::download_file;
 use crate::utils::fs::ensure_directory_exists;
 use crate::utils::template::render_template;
@@ -119,7 +119,7 @@ impl<'a> NSISGenerator<'a> {
                     path.display()
                 );
                 fs::write(&path, data)
-                    .map_err(PackageError::Io)
+                    .map_err(Error::Io)
                     .context("Failed to write file")
             })
             .map_err(|e| {
@@ -213,7 +213,7 @@ impl<'a> NSISGenerator<'a> {
             for (index, handle) in download_handles.into_iter().enumerate() {
                 handle.join().map_err(|e| {
                     error!("Download thread {} panicked: {:?}", index + 1, e);
-                    PackageError::Threading(format!("Download thread panicked: {:?}", e))
+                    Error::Threading(format!("Download thread panicked: {:?}", e))
                 })??;
                 debug!(
                     "Download thread [{}/{}] completed",
@@ -501,7 +501,7 @@ impl<'a> NSISGenerator<'a> {
 
         let template_path = self.nsis_install_dir.join("template.nsi");
         let template_content = fs::read_to_string(&template_path).map_err(|e| {
-            PackageError::Io(io::Error::new(
+            Error::Io(io::Error::new(
                 e.kind(),
                 format!(
                     "Failed to read NSIS template at {}: {}",
@@ -523,7 +523,7 @@ impl<'a> NSISGenerator<'a> {
 
         // Write the generated script to disk
         fs::write(&output_path, nsis_script_content).map_err(|e| {
-            PackageError::Io(io::Error::new(
+            Error::Io(io::Error::new(
                 e.kind(),
                 format!(
                     "Failed to write NSIS script to {}: {}",

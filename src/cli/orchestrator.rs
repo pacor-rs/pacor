@@ -9,7 +9,7 @@ use crate::cli::args::CommandOutputMode;
 use crate::cli::handlers::BuildContext;
 use crate::config::PacorConfig;
 use crate::core::builder::{BuilderFactory, BundleBuilder};
-use crate::error::{BuildError, PackageError};
+use crate::error::{BuildError, Error};
 use crate::platforms::BuildArtifact;
 use crate::utils::command::execute_flutter_clean_command;
 
@@ -134,7 +134,7 @@ impl BuildOrchestrator {
         // Perform platform-specific cleanup
         builder.clean().map_err(|e| {
             error!("Cleanup failed: {}", e);
-            PackageError::Build(BuildError::CleanupFailed {
+            Error::Build(BuildError::CleanupFailed {
                 reason: e.to_string(),
             })
         })?;
@@ -160,7 +160,7 @@ impl BuildOrchestrator {
 
         std::fs::remove_dir_all(&output_directory).map_err(|e| {
             error!("Failed to remove output directory: {}", e);
-            PackageError::Build(BuildError::CleanupFailed {
+            Error::Build(BuildError::CleanupFailed {
                 reason: format!("Failed to remove output directory: {}", e),
             })
         })?;
@@ -191,7 +191,7 @@ impl BuildOrchestrator {
 
         std::fs::remove_dir_all(&flutter_build_dir).map_err(|e| {
             error!("Failed to remove Flutter build directory: {}", e);
-            PackageError::Build(BuildError::CleanupFailed {
+            Error::Build(BuildError::CleanupFailed {
                 reason: format!("Failed to remove Flutter build directory: {}", e),
             })
         })?;

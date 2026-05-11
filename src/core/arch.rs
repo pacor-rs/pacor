@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use anyhow::Result;
 
-use crate::error::PackageError;
+use crate::error::Error;
 
 /// Only 64-bit architectures are mainstream for modern operating systems.
 /// 32-bit support has been deprecated, and this project does not maintain 32-bit versions.
@@ -13,12 +13,12 @@ pub(crate) enum Arch {
 }
 
 impl Arch {
-    pub(crate) fn current() -> Result<Arch, PackageError> {
+    pub(crate) fn current() -> Result<Arch, Error> {
         let arch = std::env::consts::ARCH;
         match arch {
             "x86_64" => Ok(Arch::X64),
             "aarch64" => Ok(Arch::ARM64),
-            _ => Err(PackageError::Architecture(arch.to_string())),
+            _ => Err(Error::Architecture(arch.to_string())),
         }
     }
 

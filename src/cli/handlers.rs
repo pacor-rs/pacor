@@ -17,7 +17,7 @@ use crate::cli::output::OutputFormatter;
 use crate::config::{ConfigurationManager, PacorConfig};
 use crate::core::builder::BundleBuilder;
 use crate::core::project::{find_flutter_project_root, validate_project_environment};
-use crate::error::{ConfigurationError, PackageError, ValidationError};
+use crate::error::{ConfigurationError, Error, ValidationError};
 use crate::platforms::android::AndroidBuilder;
 
 /// Configuration context for build operations.
@@ -209,13 +209,13 @@ fn validate_project_structure(formatter: &OutputFormatter) -> Result<()> {
     formatter.display_info("Validating project environment...");
 
     validate_project_environment().map_err(|e| {
-        PackageError::Validation(ValidationError::ProjectValidation {
+        Error::Validation(ValidationError::ProjectValidation {
             reason: e.to_string(),
         })
     })?;
 
     let project_root = find_flutter_project_root().map_err(|_e| {
-        PackageError::Validation(ValidationError::FlutterProjectNotFound {
+        Error::Validation(ValidationError::FlutterProjectNotFound {
             path: std::env::current_dir().unwrap_or_default(),
         })
     })?;
@@ -341,13 +341,13 @@ fn create_and_write_layered_default_configuration(config_path: &Path) -> Result<
     let default_config = manager.load_default_configuration()?;
 
     let config_content = toml::to_string_pretty(&default_config).map_err(|e| {
-        PackageError::Configuration(ConfigurationError::SerializationFailed {
+        Error::Configuration(ConfigurationError::SerializationFailed {
             reason: e.to_string(),
         })
     })?;
 
     std::fs::write(config_path, config_content).map_err(|e| {
-        PackageError::Configuration(ConfigurationError::WriteFailed {
+        Error::Configuration(ConfigurationError::WriteFailed {
             path: config_path.to_path_buf(),
             reason: e.to_string(),
         })
@@ -360,7 +360,7 @@ fn create_and_write_layered_default_configuration(config_path: &Path) -> Result<
 /// Display complete configuration in TOML format.
 fn display_full_configuration(config: &PacorConfig, formatter: &OutputFormatter) -> Result<()> {
     let config_toml = toml::to_string_pretty(config).map_err(|e| {
-        PackageError::Configuration(ConfigurationError::SerializationFailed {
+        Error::Configuration(ConfigurationError::SerializationFailed {
             reason: e.to_string(),
         })
     })?;

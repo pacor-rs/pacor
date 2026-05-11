@@ -4,18 +4,17 @@
 //! to improve debugging and error recovery capabilities across the application.
 
 use std::{ffi::OsString, path::PathBuf};
-use thiserror::Error;
 
 /// Result type alias for Pacor operations.
-pub type Result<T> = std::result::Result<T, PackageError>;
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// Main error enum for all Pacor operations.
 ///
 /// This enum provides fine-grained error categorization to improve error handling,
 /// debugging, and user experience. Each category contains specific error variants
 /// that provide detailed context about what went wrong.
-#[derive(Error, Debug)]
-pub enum PackageError {
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
     // Flutter project-related errors
     #[error("Project error: {0}")]
     Project(#[from] ProjectError),
@@ -73,7 +72,7 @@ pub enum PackageError {
     Threading(String),
 }
 
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum ProjectError {
     #[error(
         "Could not find pubspec.yaml. Please make sure you are running this inside a Flutter project."
@@ -84,7 +83,7 @@ pub enum ProjectError {
 }
 
 /// Configuration-related errors with specific context.
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum ConfigurationError {
     #[error("Platform not enabled: {platform}")]
     PlatformNotEnabled { platform: String },
@@ -115,7 +114,7 @@ pub enum ConfigurationError {
 }
 
 /// Build process errors with specific context.
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum BuildError {
     #[error("No .exe file found in build output")]
     ExecutableNotFound,
@@ -137,7 +136,7 @@ pub enum BuildError {
 }
 
 /// Platform-specific errors with detailed context.
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum PlatformError {
     #[error("Unsupported platform: {platform}")]
     UnsupportedPlatform { platform: String },
@@ -160,7 +159,7 @@ pub enum PlatformError {
 }
 
 /// Validation errors for project and environment checks.
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum ValidationError {
     #[error("Project validation failed: {reason}")]
     ProjectValidation { reason: String },
@@ -178,7 +177,7 @@ pub enum ValidationError {
     PermissionDenied { path: PathBuf, operation: String },
 }
 
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum CommandError {
     #[error("Failed to execute {}: {error}",command.display())]
     Execute {
@@ -230,8 +229,8 @@ mod tests {
 
     #[test]
     fn test_package_error_from_project() {
-        let err: PackageError = ProjectError::FlutterNotInstalled.into();
-        assert!(matches!(err, PackageError::Project(_)));
+        let err: Error = ProjectError::FlutterNotInstalled.into();
+        assert!(matches!(err, Error::Project(_)));
     }
 
     #[test]
@@ -240,8 +239,8 @@ mod tests {
             command: OsString::from("test"),
             exit_info: "exit code 1".to_string(),
         };
-        let err: PackageError = cmd_err.into();
-        assert!(matches!(err, PackageError::Command(_)));
+        let err: Error = cmd_err.into();
+        assert!(matches!(err, Error::Command(_)));
     }
 
     #[test]

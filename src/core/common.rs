@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use crate::cli::args::CommandOutputMode;
 use crate::core::arch::Arch;
-use crate::error::{ConfigurationError, PackageError, PlatformError, Result, ValidationError};
+use crate::error::{ConfigurationError, Error, PlatformError, Result, ValidationError};
 use crate::platforms::BuildArtifact;
 use crate::utils::crypto::generate_sha1_checksum_file;
 
@@ -102,7 +102,7 @@ pub(crate) trait ArtifactManager {
     /// Returns an error if checksum generation fails
     fn create_artifact_with_checksum(&self, artifact_path: PathBuf) -> Result<BuildArtifact> {
         let checksum_path = generate_sha1_checksum_file(&artifact_path).map_err(|e| {
-            PackageError::Build(crate::error::BuildError::ArtifactGenerationFailed {
+            Error::Build(crate::error::BuildError::ArtifactGenerationFailed {
                 artifact: artifact_path.display().to_string(),
                 reason: format!("Failed to generate checksum: {}", e),
             })
@@ -126,7 +126,7 @@ pub(crate) trait ArtifactManager {
         for path in paths {
             let path_ref = path.as_ref();
             if !path_ref.exists() {
-                return Err(PackageError::Validation(ValidationError::FileValidation {
+                return Err(Error::Validation(ValidationError::FileValidation {
                     file: path_ref.to_path_buf(),
                     reason: "Required file does not exist".to_string(),
                 }));
@@ -152,11 +152,11 @@ pub(crate) trait BuildEnvironmentValidator {
     fn validate_tool_availability(&self, tool_name: &str, platform: &str) -> Result<PathBuf> {
         match crate::utils::command::find_command_path(tool_name) {
             Ok(Some(path)) => Ok(path),
-            Ok(None) => Err(PackageError::Platform(PlatformError::ToolNotFound {
+            Ok(None) => Err(Error::Platform(PlatformError::ToolNotFound {
                 tool: tool_name.to_string(),
                 platform: platform.to_string(),
             })),
-            Err(_) => Err(PackageError::Platform(PlatformError::ToolNotFound {
+            Err(_) => Err(Error::Platform(PlatformError::ToolNotFound {
                 tool: tool_name.to_string(),
                 platform: platform.to_string(),
             })),
@@ -173,7 +173,7 @@ pub(crate) trait BuildEnvironmentValidator {
     /// Returns validation error if directory access is insufficient
     fn validate_directory_permissions(&self, directory: &Path, operation: &str) -> Result<()> {
         if !directory.exists() {
-            return Err(PackageError::Validation(ValidationError::FileValidation {
+            return Err(Error::Validation(ValidationError::FileValidation {
                 file: directory.to_path_buf(),
                 reason: "Directory does not exist".to_string(),
             }));
@@ -187,12 +187,10 @@ pub(crate) trait BuildEnvironmentValidator {
                 let _ = std::fs::remove_file(&test_file);
                 Ok(())
             }
-            Err(_) => Err(PackageError::Validation(
-                ValidationError::PermissionDenied {
-                    path: directory.to_path_buf(),
-                    operation: operation.to_string(),
-                },
-            )),
+            Err(_) => Err(Error::Validation(ValidationError::PermissionDenied {
+                path: directory.to_path_buf(),
+                operation: operation.to_string(),
+            })),
         }
     }
 }
@@ -215,22 +213,20 @@ pub(crate) trait BuildCleaner {
         }
 
         if !directory.is_dir() {
-            return Err(PackageError::Build(
-                crate::error::BuildError::CleanupFailed {
-                    reason: format!("{} is not a directory", directory.display()),
-                },
-            ));
+            return Err(Error::Build(crate::error::BuildError::CleanupFailed {
+                reason: format!("{} is not a directory", directory.display()),
+            }));
         }
 
         let entries: std::fs::ReadDir = std::fs::read_dir(directory).map_err(|e| {
-            PackageError::Build(crate::error::BuildError::CleanupFailed {
+            Error::Build(crate::error::BuildError::CleanupFailed {
                 reason: format!("Failed to read directory {}: {}", directory.display(), e),
             })
         })?;
 
         for entry in entries {
             let entry = entry.map_err(|e| {
-                PackageError::Build(crate::error::BuildError::CleanupFailed {
+                Error::Build(crate::error::BuildError::CleanupFailed {
                     reason: format!("Failed to read directory entry: {}", e),
                 })
             })?;
@@ -238,13 +234,13 @@ pub(crate) trait BuildCleaner {
             let path = entry.path();
             if path.is_dir() {
                 std::fs::remove_dir_all(&path).map_err(|e| {
-                    PackageError::Build(crate::error::BuildError::CleanupFailed {
+                    Error::Build(crate::error::BuildError::CleanupFailed {
                         reason: format!("Failed to remove directory {}: {}", path.display(), e),
                     })
                 })?;
             } else {
                 std::fs::remove_file(&path).map_err(|e| {
-                    PackageError::Build(crate::error::BuildError::CleanupFailed {
+                    Error::Build(crate::error::BuildError::CleanupFailed {
                         reason: format!("Failed to remove file {}: {}", path.display(), e),
                     })
                 })?;
@@ -270,11 +266,9 @@ pub(crate) trait ConfigurationValidator {
     /// Returns configuration error if the field is missing
     fn validate_required_config<T>(&self, field_name: &str, value: &Option<T>) -> Result<()> {
         if value.is_none() {
-            return Err(PackageError::Configuration(
-                ConfigurationError::MissingRequired {
-                    field: field_name.to_string(),
-                },
-            ));
+            return Err(Error::Configuration(ConfigurationError::MissingRequired {
+                field: field_name.to_string(),
+            }));
         }
         Ok(())
     }
@@ -289,14 +283,12 @@ pub(crate) trait ConfigurationValidator {
     /// Returns configuration error if the path is missing or invalid
     fn validate_config_file_path(&self, field_name: &str, path: &Option<PathBuf>) -> Result<()> {
         match path {
-            None => Err(PackageError::Configuration(
-                ConfigurationError::MissingRequired {
-                    field: field_name.to_string(),
-                },
-            )),
-            Some(p) if !p.exists() => Err(PackageError::Configuration(
-                ConfigurationError::FileNotFound { path: p.clone() },
-            )),
+            None => Err(Error::Configuration(ConfigurationError::MissingRequired {
+                field: field_name.to_string(),
+            })),
+            Some(p) if !p.exists() => Err(Error::Configuration(ConfigurationError::FileNotFound {
+                path: p.clone(),
+            })),
             Some(_) => Ok(()),
         }
     }
@@ -334,7 +326,7 @@ pub(crate) trait FlutterBuildOperations {
     ) -> Result<()> {
         crate::utils::command::execute_flutter_build_command(args, project_root, command_output)
             .map_err(|e| {
-                PackageError::Build(crate::error::BuildError::FlutterBuildFailed {
+                Error::Build(crate::error::BuildError::FlutterBuildFailed {
                     code: -1, // We don't have access to the actual exit code here
                     output: e.to_string(),
                 })

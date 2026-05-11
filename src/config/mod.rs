@@ -43,7 +43,7 @@ pub(crate) use crate::config::{
     macos::MacOSBuildConfig,
     windows::WindowsConfig,
 };
-use crate::error::{ConfigurationError, PackageError, Result};
+use crate::error::{ConfigurationError, Error, Result};
 pub(crate) use layers::ConfigurationManager;
 
 mod android;
@@ -144,7 +144,7 @@ impl PacorConfig {
     pub(crate) fn validate(&self) -> Result<()> {
         // Validate application configuration
         self.app.validate().map_err(|e| {
-            PackageError::Configuration(ConfigurationError::ValidationFailed {
+            Error::Configuration(ConfigurationError::ValidationFailed {
                 field: "app".to_string(),
                 reason: e.to_string(),
             })
@@ -163,11 +163,9 @@ impl PacorConfig {
     fn validate_build_options(&self) -> Result<()> {
         // Validate output directory path
         if self.build.output_dir.is_empty() {
-            return Err(PackageError::Configuration(
-                ConfigurationError::MissingRequired {
-                    field: "build.output_dir".to_string(),
-                },
-            ));
+            return Err(Error::Configuration(ConfigurationError::MissingRequired {
+                field: "build.output_dir".to_string(),
+            }));
         }
 
         Ok(())
@@ -196,12 +194,10 @@ impl PacorConfig {
                 .unwrap_or(false);
 
         if !any_enabled {
-            return Err(PackageError::Configuration(
-                ConfigurationError::ValidationFailed {
-                    field: "platforms".to_string(),
-                    reason: "At least one platform must be enabled".to_string(),
-                },
-            ));
+            return Err(Error::Configuration(ConfigurationError::ValidationFailed {
+                field: "platforms".to_string(),
+                reason: "At least one platform must be enabled".to_string(),
+            }));
         }
 
         Ok(())
@@ -214,7 +210,7 @@ impl PacorConfig {
     /// Returns an error if the Flutter project root cannot be determined.
     pub(crate) fn project_root(&self) -> Result<PathBuf> {
         crate::core::project::find_flutter_project_root().map_err(|e| {
-            PackageError::Configuration(ConfigurationError::ValidationFailed {
+            Error::Configuration(ConfigurationError::ValidationFailed {
                 field: "project_root".to_string(),
                 reason: format!("Could not determine project root: {}", e),
             })

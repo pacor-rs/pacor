@@ -51,7 +51,7 @@ use crate::config::{
     PlatformsConfig, WindowsConfig,
 };
 use crate::core::project::find_flutter_project_root;
-use crate::error::{ConfigurationError, PackageError, Result};
+use crate::error::{ConfigurationError, Error, Result};
 
 /// Configuration source priority levels
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -139,7 +139,7 @@ impl ConfigurationManager {
     /// Create a new configuration manager
     pub(crate) fn new() -> Result<Self> {
         let project_root = find_flutter_project_root().map_err(|e| {
-            PackageError::Configuration(ConfigurationError::ValidationFailed {
+            Error::Configuration(ConfigurationError::ValidationFailed {
                 field: "project_root".to_string(),
                 reason: format!("Could not locate Flutter project: {}", e),
             })
@@ -155,7 +155,7 @@ impl ConfigurationManager {
     /// This is useful for commands like `init` that need to work before a project is set up
     pub(crate) fn new_standalone() -> Result<Self> {
         let current_dir = std::env::current_dir().map_err(|e| {
-            PackageError::Configuration(ConfigurationError::ValidationFailed {
+            Error::Configuration(ConfigurationError::ValidationFailed {
                 field: "current_directory".to_string(),
                 reason: format!("Could not get current directory: {}", e),
             })
@@ -298,7 +298,7 @@ impl ConfigurationManager {
         debug!("Loading user configuration from {}", config_path.display());
 
         let config_content = std::fs::read_to_string(&config_path).map_err(|e| {
-            PackageError::Configuration(ConfigurationError::InvalidFormat {
+            Error::Configuration(ConfigurationError::InvalidFormat {
                 file: config_path.clone(),
                 reason: format!("Failed to read file: {}", e),
             })
@@ -306,7 +306,7 @@ impl ConfigurationManager {
 
         // Parse as complete config first, then convert to partial
         let user_config: PacorConfig = toml::from_str(&config_content).map_err(|e| {
-            PackageError::Configuration(ConfigurationError::InvalidFormat {
+            Error::Configuration(ConfigurationError::InvalidFormat {
                 file: config_path,
                 reason: format!("Invalid TOML format: {}", e),
             })
@@ -347,15 +347,13 @@ impl ConfigurationManager {
                 "debug" => FlutterBuildMode::Debug,
                 "profile" => FlutterBuildMode::Profile,
                 _ => {
-                    return Err(PackageError::Configuration(
-                        ConfigurationError::ValidationFailed {
-                            field: "PACOR_BUILD_MODE".to_string(),
-                            reason: format!(
-                                "Invalid build mode '{}'. Must be one of: release, debug, profile",
-                                build_mode
-                            ),
-                        },
-                    ));
+                    return Err(Error::Configuration(ConfigurationError::ValidationFailed {
+                        field: "PACOR_BUILD_MODE".to_string(),
+                        reason: format!(
+                            "Invalid build mode '{}'. Must be one of: release, debug, profile",
+                            build_mode
+                        ),
+                    }));
                 }
             };
             let build_options = env_config.build.get_or_insert_with(Default::default);
@@ -502,19 +500,19 @@ impl ConfigurationManager {
         let has_app = partial.app.is_some();
 
         let app_config = partial.app.ok_or_else(|| {
-            PackageError::Configuration(ConfigurationError::MissingRequired {
+            Error::Configuration(ConfigurationError::MissingRequired {
                 field: "app".to_string(),
             })
         })?;
 
         let build_config = partial.build.ok_or_else(|| {
-            PackageError::Configuration(ConfigurationError::MissingRequired {
+            Error::Configuration(ConfigurationError::MissingRequired {
                 field: "build".to_string(),
             })
         })?;
 
         let platforms_config = partial.platforms.ok_or_else(|| {
-            PackageError::Configuration(ConfigurationError::MissingRequired {
+            Error::Configuration(ConfigurationError::MissingRequired {
                 field: "platforms".to_string(),
             })
         })?;
