@@ -50,7 +50,8 @@ pub(crate) struct WindowsConfig {
     /// Path to the code signing certificate file
     certificate_path: Option<PathBuf>,
 
-    /// Password for the code signing certificate
+    /// Certificate password. Prefer setting `PACOR_WINDOWS_CERT_PASSWORD` env var.
+    #[serde(skip_serializing)]
     certificate_password: Option<String>,
 
     /// MSI upgrade code (GUID) for handling upgrades/downgrades
@@ -83,14 +84,11 @@ impl WindowsConfig {
     }
 
     #[cfg(target_os = "windows")]
-    pub(crate) fn certificate_password(&self) -> &Option<String> {
-        &self.certificate_password
+    pub(crate) fn certificate_password(&self) -> Option<String> {
+        std::env::var("PACOR_WINDOWS_CERT_PASSWORD")
+            .ok()
+            .or_else(|| self.certificate_password.clone())
     }
-
-    // #[cfg(target_os = "windows")]
-    // pub(crate) fn msi_upgrade_code(&self) -> Option<&str> {
-    //     self.msi_upgrade_code.as_deref()
-    // }
 
     #[cfg(target_os = "windows")]
     pub(crate) fn is_portable_build_enabled(&self) -> bool {
