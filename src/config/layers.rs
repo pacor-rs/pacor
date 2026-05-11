@@ -47,7 +47,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
 use crate::config::{
-    AndroidConfig, AppConfig, BuildOptions, MacOSBuildConfig, PacorConfig, PlatformsConfig,
+    AndroidConfig, AppConfig, BuildOptions, FlutterBuildMode, MacOSBuildConfig, PacorConfig, PlatformsConfig,
     WindowsConfig,
 };
 use crate::core::project::find_flutter_project_root;
@@ -102,7 +102,7 @@ pub(crate) struct PartialAppConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct PartialBuildOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) flutter_build_mode: Option<String>,
+    pub(crate) flutter_build_mode: Option<FlutterBuildMode>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) output_dir: Option<String>,
@@ -229,7 +229,7 @@ impl ConfigurationManager {
         let default_config = PartialBundleConfig {
             app: Some(PartialAppConfig::default()),
             build: Some(PartialBuildOptions {
-                flutter_build_mode: Some("release".to_string()),
+                flutter_build_mode: Some(FlutterBuildMode::Release),
                 output_dir: Some("dist".to_string()),
             }),
             platforms: Some(PartialPlatformsConfig::default()),
@@ -342,8 +342,24 @@ impl ConfigurationManager {
         }
 
         if let Ok(build_mode) = env::var("PACOR_BUILD_MODE") {
+            let mode = match build_mode.as_str() {
+                "release" => FlutterBuildMode::Release,
+                "debug" => FlutterBuildMode::Debug,
+                "profile" => FlutterBuildMode::Profile,
+                _ => {
+                    return Err(PackageError::Configuration(
+                        ConfigurationError::ValidationFailed {
+                            field: "PACOR_BUILD_MODE".to_string(),
+                            reason: format!(
+                                "Invalid build mode '{}'. Must be one of: release, debug, profile",
+                                build_mode
+                            ),
+                        },
+                    ));
+                }
+            };
             let build_options = env_config.build.get_or_insert_with(Default::default);
-            build_options.flutter_build_mode = Some(build_mode);
+            build_options.flutter_build_mode = Some(mode);
             has_overrides = true;
             debug!("Environment override: PACOR_BUILD_MODE");
         }
@@ -465,7 +481,7 @@ impl ConfigurationManager {
             app: Some(PartialAppConfig {
                 default_locale: Some(config.app.default_locale().clone()),
                 url: Some(config.app.url().to_string()),
-                authors: None, // Would need more complex conversion for full support
+                authors: config.app.authors.clone(),
                 i18n: Some(config.app.i18n().clone()),
             }),
             build: Some(PartialBuildOptions {
@@ -519,7 +535,7 @@ impl ConfigurationManager {
         let complete_build = BuildOptions {
             flutter_build_mode: build_config
                 .flutter_build_mode
-                .unwrap_or_else(|| "release".to_string()),
+                .unwrap_or_default(),
             output_dir: build_config
                 .output_dir
                 .unwrap_or_else(|| "dist".to_string()),
