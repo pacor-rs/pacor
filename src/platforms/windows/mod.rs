@@ -155,9 +155,10 @@ impl<'a> BundleBuilder for WindowsBuilder<'a> {
                 self.windows_config.certificate_path(),
             )?;
 
+            let cert_password = self.windows_config.certificate_password();
             self.validate_required_config(
                 "platforms.windows.certificate_password",
-                self.windows_config.certificate_password(),
+                &cert_password,
             )?;
         }
 
@@ -429,7 +430,7 @@ impl WindowsBuilder<'_> {
 
         // 经过检测，运行到这里时签名配置一定存在
         let cert_file = self.windows_config.certificate_path().as_ref().unwrap();
-        let password = self.windows_config.certificate_password().as_ref().unwrap();
+        let password = self.windows_config.certificate_password().unwrap();
 
         // Basic signtool command:
         // signtool sign /fd SHA256 /f "cert.pfx" /p "password" "app.exe"
