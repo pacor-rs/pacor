@@ -1,0 +1,129 @@
+//! Windows platform configuration (NSIS installer / portable archive).
+
+use std::{fmt::Display, path::PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+/// Supported Windows installer formats.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum InstallerFormat {
+    /// Nullsoft Scriptable Install System (NSIS) installer.
+    #[default]
+    Nsis,
+
+    /// Windows Installer (MSI) package. Not implemented yet.
+    Msi,
+}
+
+impl InstallerFormat {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Nsis => "nsis",
+            Self::Msi => "msi",
+        }
+    }
+}
+
+impl std::str::FromStr for InstallerFormat {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "nsis" => Ok(Self::Nsis),
+            "msi" => Ok(Self::Msi),
+            other => Err(format!(
+                "unsupported Windows installer format `{other}` (expected one of: nsis, msi)"
+            )),
+        }
+    }
+}
+
+impl Display for InstallerFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// Configuration for Windows builds.
+///
+/// All fields are always deserializable, regardless of the host, so a single
+/// `pacor.toml` can describe a Windows target when building from any OS.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct WindowsConfig {
+    /// Whether Windows builds are enabled.
+    #[serde(default = "super::default_enabled")]
+    pub enabled: bool,
+
+    /// Installer format to generate.
+    #[serde(default)]
+    pub installer_format: InstallerFormat,
+
+    /// Also produce a portable (standalone) ZIP archive.
+    #[serde(default = "default_portable_build")]
+    pub build_portable: bool,
+
+    /// Path to the code signing tool executable (e.g. `signtool.exe`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing_tool_path: Option<PathBuf>,
+
+    /// Path to the code signing certificate file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certificate_path: Option<PathBuf>,
+
+    /// Certificate password. Prefer the `PACOR_WINDOWS_CERT_PASSWORD` env var.
+    #[serde(default, skip_serializing)]
+    pub certificate_password: Option<String>,
+
+    /// MSI upgrade code (GUID). Only relevant when `installer_format = "msi"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub msi_upgrade_code: Option<String>,
+}
+
+fn default_portable_build() -> bool {
+    true
+}
+
+impl WindowsConfig {
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub fn installer_format(&self) -> &InstallerFormat {
+        &self.installer_format
+    }
+
+    pub fn signing_tool_path(&self) -> &Option<PathBuf> {
+        &self.signing_tool_path
+    }
+
+    pub fn certificate_path(&self) -> &Option<PathBuf> {
+        &self.certificate_path
+    }
+
+    /// Certificate password, with the environment variable taking precedence.
+    pub fn certificate_password(&self) -> Option<String> {
+        std::env::var("PACOR_WINDOWS_CERT_PASSWORD")
+            .ok()
+            .or_else(|| self.certificate_password.clone())
+    }
+
+    pub fn is_portable_build_enabled(&self) -> bool {
+        self.build_portable
+    }
+}
+
+impl Default for WindowsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            installer_format: InstallerFormat::Nsis,
+            signing_tool_path: None,
+            certificate_path: None,
+            certificate_password: None,
+            msi_upgrade_code: None,
+            build_portable: true,
+        }
+    }
+}

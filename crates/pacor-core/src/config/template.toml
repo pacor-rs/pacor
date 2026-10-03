@@ -1,0 +1,114 @@
+# pacor.toml — single configuration file for every supported platform.
+#
+# One file describes all platforms; `pacor build --target <linux|macos|windows|android>`
+# selects which section is consumed. Sections for other platforms are ignored,
+# so the same file can be committed and used on any host.
+#
+# Run `pacor config --full` to print the effective, merged configuration.
+
+[app]
+# Fallback locale. Must have a matching `[app.i18n.<locale>]` entry.
+default_locale = "en-US"
+url = "https://example.com"
+authors = ["Your Name <you@example.com>"]
+
+# Localized application metadata. Add one table per supported locale.
+#
+# These drive, per target:
+#   Linux   -> desktop entry `Name[locale]` / `Comment[locale]`, using the
+#              POSIX spelling required by the desktop entry spec (zh_CN, not zh-CN)
+#   macOS   -> `<language-id>.lproj/InfoPlist.strings` plus `CFBundleLocalizations`
+#              using Apple language IDs (zh-Hans, zh-Hant, en, en-GB, ja)
+#   Windows -> NSIS language macros and `LangString` blocks
+# Android uses no localized metadata (the APK has no installer UI).
+[app.i18n.en-US]
+name = "My App"
+display_name = "My App"
+description = "A Flutter application"
+publisher = "Publisher Name"
+copyright = "Copyright (C) 2025 Publisher Name. All rights reserved."
+
+[app.i18n.zh-CN]
+name = "我的应用"
+display_name = "我的应用"
+description = "一个 Flutter 应用"
+publisher = "我的公司"
+copyright = "版权所有 © 2025 我的公司。保留所有权利。"
+
+[build]
+# release | debug | profile
+flutter_build_mode = "release"
+output_dir = "dist"
+
+# ---------------------------------------------------------------------------
+# Linux: AppImage and/or DEB
+# ---------------------------------------------------------------------------
+[platforms.linux]
+enabled = true
+# formats = ["appimage", "deb", "rpm"]   # rpm is not implemented yet
+formats = ["appimage"]
+# maintainer = "Your Name <you@example.com>"
+# icon_directory = "assets/icons"        # defaults to a downloaded icon set
+
+# Freedesktop desktop entry. `Categories` decides which application menu the
+# entry appears in. It defaults to ["Utility"] (the "Accessories" menu).
+#
+# Values use the canonical spellings from the freedesktop registries:
+#   Main       -> AudioVideo, Audio, Video, Development, Education, Game,
+#                 Graphics, Network, Office, Science, Settings, System, Utility
+#   Additional -> 2DGraphics, FileTools, Player, TextEditor, IDE, GTK, ...
+#
+# Two rules are checked when the configuration is loaded:
+#   * `Additional` categories require at least one `Main` category, otherwise
+#     the entry cannot be placed in any menu (this is an error).
+#   * every `Additional` category should come with one of its related
+#     categories, e.g. `FileTools` with `Utility`, `TextEditor` with `Utility`.
+#     Violations are reported as warnings.
+[platforms.linux.desktop]
+categories = [{ Main = "Utility" }]
+# Example of a paired main + additional configuration:
+# categories = [{ Main = "Graphics" }, { Additional = "2DGraphics" }]
+# comment = "Short description shown by application menus"
+# mime_type = "x-scheme-handler/myapp"
+
+[platforms.linux.deb]
+# section = "utils"
+# priority = "optional"
+# depends = ["libgtk-3-0", "libblkid1", "liblzma5"]
+# changelog = "CHANGELOG.md"
+
+# ---------------------------------------------------------------------------
+# Windows: NSIS installer and/or portable ZIP
+# ---------------------------------------------------------------------------
+[platforms.windows]
+enabled = true
+installer_format = "nsis"      # nsis | msi (msi not implemented yet)
+build_portable = true
+# signing_tool_path = "C:/Program Files (x86)/Windows Kits/10/bin/signtool.exe"
+# certificate_path = "cert.pfx"
+# Prefer the PACOR_WINDOWS_CERT_PASSWORD environment variable over a literal.
+# certificate_password = "..."
+
+# ---------------------------------------------------------------------------
+# macOS: DMG installer (+ tar.gz updater archive)
+# ---------------------------------------------------------------------------
+[platforms.macos]
+enabled = true
+minimum_system_version = "10.14"
+category = "public.app-category.entertainment"
+# dmg_background = "assets/dmg-background.png"
+# dmg_window_size = [500, 350]
+# codesign_identity = "Developer ID Application: ..."
+# notarize_credentials = "AC_PASSWORD"   # notarytool keychain profile
+
+# ---------------------------------------------------------------------------
+# Android: APK
+# ---------------------------------------------------------------------------
+[platforms.android]
+enabled = true
+target_abi = ["arm64-v8a"]
+# keystore_file = "android/app/upload-keystore.jks"
+# key_alias = "upload"
+# Prefer the PACOR_ANDROID_KEYSTORE_PASSWORD / PACOR_ANDROID_KEY_PASSWORD env vars.
+# PACOR_ANDROID_KEYSTORE_PASSWORD="..."
+# PACOR_ANDROID_KEY_PASSWORD="..."

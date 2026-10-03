@@ -1,0 +1,34 @@
+{
+  "categories": [
+    {
+      "title": "## 🎉 Features",
+      "labels": ["feature"]
+    },
+    {
+      "title": "## 🚀 Enhancements",
+      "labels": ["enhancement"]
+    },
+    {
+      "title": "## 🐛 Fixes",
+      "labels": ["fix", "bug"]
+    },
+    {
+      "title": "## 📦 Dependencies",
+      "labels": ["dependencies"]
+    },
+    {
+      "title": "## 🤖 Workflows",
+      "labels": ["ci"]
+    },
+    {
+      "title": "## ⚡ Performance Improvements",
+      "labels": ["perf"]
+    },
+    {
+      "title": "## 🛠 Breaking Changes",
+      "labels": ["semver-major", "breaking-change"]
+    }
+  ],
+  "pr_template": "- #{{TITLE}} by @#{{AUTHOR}} in ##{{NUMBER}}",
+  "base_branches": ["main"]
+}

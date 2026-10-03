@@ -1,0 +1,27 @@
+[lib]
+# Docs contain installer scripts / platform snippets, not Rust examples.
+doctest = false
+
+[package]
+name = "pacor-packaging-linux"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Linux (AppImage/DEB) packaging backends for pacor."
+
+[dependencies]
+pacor-core.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tempfile.workspace = true
+flate2.workspace = true
+tar.workspace = true
+walkdir.workspace = true
+md5.workspace = true
+ar.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+toml.workspace = true

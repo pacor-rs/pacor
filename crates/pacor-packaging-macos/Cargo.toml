@@ -1,0 +1,21 @@
+[lib]
+# Docs contain installer scripts / platform snippets, not Rust examples.
+doctest = false
+
+[package]
+name = "pacor-packaging-macos"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "macOS (DMG) packaging backends for pacor."
+
+[dependencies]
+pacor-core.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

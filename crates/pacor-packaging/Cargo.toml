@@ -1,0 +1,21 @@
+[lib]
+# Docs contain installer scripts / platform snippets, not Rust examples.
+doctest = false
+
+[package]
+name = "pacor-packaging"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Target registry and packaging orchestration for pacor."
+
+[dependencies]
+pacor-core.workspace = true
+pacor-packaging-android.workspace = true
+pacor-packaging-linux.workspace = true
+pacor-packaging-macos.workspace = true
+pacor-packaging-windows.workspace = true
+anyhow.workspace = true
+tracing.workspace = true

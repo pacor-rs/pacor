@@ -1,0 +1,113 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/pacor-cli",
+  "crates/pacor-core",
+  "crates/pacor-packaging",
+  "crates/pacor-packaging-android",
+  "crates/pacor-packaging-linux",
+  "crates/pacor-packaging-macos",
+  "crates/pacor-packaging-windows",
+]
+
+[workspace.package]
+version = "0.1.0-alpha"
+authors = ["thep0y"]
+edition = "2024"
+rust-version = "1.99"
+description = "Cross-platform packaging tool for Flutter applications."
+repository = "https://github.com/pacor-rs/pacor"
+license = "MIT"
+
+[workspace.dependencies]
+# Error handling
+anyhow = "1"
+thiserror = { version = "2", default-features = false }
+
+# Serialization / configuration
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde_yaml = { version = "0", default-features = false }
+toml = {
+  version = "1",
+  default-features = false,
+  features = [
+    "display",
+    "parse",
+    "serde",
+  ]
+}
+
+# CLI / output
+# `error-context` makes clap render the argument name and the parser's message
+# for value errors; without it a failed `FromStr` collapses to the useless
+# "invalid value for one of the arguments". `suggestions` powers typo hints.
+clap = {
+  version = "4",
+  default-features = false,
+  features = [
+    "derive",
+    "error-context",
+    "help",
+    "std",
+    "suggestions",
+    "usage",
+  ]
+}
+colored = { version = "3", default-features = false }
+
+# Logging
+tracing = {
+  version = "0",
+  default-features = false,
+  features = [
+    "release_max_level_debug",
+  ]
+}
+tracing-subscriber = {
+  version = "0",
+  default-features = false,
+  features = [
+    "env-filter",
+    "fmt",
+  ]
+}
+
+# Platform / filesystem
+dirs = { version = "6", default-features = false }
+tempfile = { version = "3", default-features = false, features = ["getrandom"] }
+temp-env = "0"
+
+# Pure-Rust zlib backend: avoids a C toolchain for the target, which lets CI
+# cross-check the other platforms from Linux. See docs in README (Development).
+flate2 = { version = "1", default-features = false, features = [
+    "zlib-rs",
+] }
+tar = { version = "0", default-features = false }
+# Networking / archives
+ureq = { version = "3", default-features = false, features = ["native-tls"] }
+walkdir = { version = "2", default-features = false }
+zip = { version = "8", default-features = false, features = ["deflate"] }
+
+ar = { version = "0", default-features = false }
+md5 = { version = "0", default-features = false, features = ["std"] }
+# Hashing / package formats
+sha1 = { version = "0", default-features = false, features = ["std"] }
+
+# Internal crates
+pacor-core = { path = "crates/pacor-core" }
+pacor-packaging = { path = "crates/pacor-packaging" }
+pacor-packaging-android = { path = "crates/pacor-packaging-android" }
+pacor-packaging-linux = { path = "crates/pacor-packaging-linux" }
+pacor-packaging-macos = { path = "crates/pacor-packaging-macos" }
+pacor-packaging-windows = { path = "crates/pacor-packaging-windows" }
+
+[profile.release]
+opt-level = "z"  # z level is the smallest
+debug = false
+strip = true
+debug-assertions = false
+overflow-checks = false
+lto = true
+panic = "abort"
+incremental = false
+codegen-units = 1

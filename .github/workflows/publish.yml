@@ -1,0 +1,248 @@
+name: Build and Publish Release
+
+on:
+    push:
+        tags:
+            - "v*"
+    workflow_dispatch:
+
+env:
+    CARGO_TERM_COLOR: always
+
+jobs:
+    build:
+        name: Build ${{ matrix.platform.name }}
+        runs-on: ${{ matrix.platform.os }}
+        strategy:
+            fail-fast: false
+            matrix:
+                platform:
+                    # macOS builds
+                    - name: macOS-x64
+                      os: macos-latest
+                      target: x86_64-apple-darwin
+                      binary: pacor
+                      compress: false
+                    - name: macOS-arm64
+                      os: macos-latest
+                      target: aarch64-apple-darwin
+                      binary: pacor
+                      compress: false
+
+                    # Linux builds
+                    - name: Linux-x64
+                      os: ubuntu-latest
+                      target: x86_64-unknown-linux-gnu
+                      binary: pacor
+                      compress: true
+                    - name: Linux-arm64
+                      os: ubuntu-latest
+                      target: aarch64-unknown-linux-gnu
+                      binary: pacor
+                      compress: true
+
+                    # Windows builds
+                    - name: Windows-x64
+                      os: windows-latest
+                      target: x86_64-pc-windows-msvc
+                      binary: pacor.exe
+                      compress: true
+                    - name: Windows-arm64
+                      os: windows-latest
+                      target: aarch64-pc-windows-msvc
+                      binary: pacor.exe
+                      compress: true
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Setup Rust
+              uses: dtolnay/rust-toolchain@stable
+              with:
+                  targets: ${{ matrix.platform.target }}
+
+            - name: Setup Rust cache
+              uses: Swatinem/rust-cache@v2
+              with:
+                  key: ${{ matrix.platform.target }}
+
+            - name: Install cross-compilation dependencies (Linux ARM64)
+              if: matrix.platform.os == 'ubuntu-latest' && matrix.platform.target == 'aarch64-unknown-linux-gnu'
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y gcc-aarch64-linux-gnu
+                  echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+
+            - name: Build release binary
+              run: |
+                  cargo build --release --target ${{ matrix.platform.target }}
+
+            - name: Install UPX (Linux)
+              if: matrix.platform.compress && matrix.platform.os == 'ubuntu-latest'
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y upx-ucl
+
+            - name: Install UPX (Windows)
+              if: matrix.platform.compress && matrix.platform.os == 'windows-latest'
+              run: |
+                  # Download and install UPX
+                  Invoke-WebRequest -Uri "https://github.com/upx/upx/releases/download/v4.2.1/upx-4.2.1-win64.zip" -OutFile "upx.zip"
+                  Expand-Archive -Path "upx.zip" -DestinationPath "."
+                  Move-Item "upx-4.2.1-win64\upx.exe" "upx.exe"
+
+            - name: Compress binary with UPX (Linux/Windows)
+              if: matrix.platform.compress
+              shell: bash
+              run: |
+                  binary_path="target/${{ matrix.platform.target }}/release/${{ matrix.platform.binary }}"
+                  echo "Original binary size: $(du -h "$binary_path" | cut -f1)"
+
+                  if [[ "${{ matrix.platform.os }}" == "windows-latest" ]]; then
+                    ./upx.exe --best --lzma "$binary_path" || {
+                      echo "UPX compression failed, continuing with uncompressed binary"
+                      echo "COMPRESSION_FAILED=true" >> $GITHUB_ENV
+                    }
+                  else
+                    upx --best --lzma "$binary_path" || {
+                      echo "UPX compression failed, continuing with uncompressed binary"
+                      echo "COMPRESSION_FAILED=true" >> $GITHUB_ENV
+                    }
+                  fi
+
+                  echo "Final binary size: $(du -h "$binary_path" | cut -f1)"
+
+            - name: Validate binary
+              shell: bash
+              run: |
+                  binary_path="target/${{ matrix.platform.target }}/release/${{ matrix.platform.binary }}"
+                  if [[ ! -f "$binary_path" ]]; then
+                    echo "Error: Binary not found at $binary_path"
+                    exit 1
+                  fi
+
+                  # Test that the binary can be executed (at least shows help)
+                  if [[ "${{ matrix.platform.os }}" != "ubuntu-latest" || "${{ matrix.platform.target }}" == "x86_64-unknown-linux-gnu" ]]; then
+                    echo "Testing binary execution..."
+                    if [[ "${{ matrix.platform.os }}" == "windows-latest" ]]; then
+                      "$binary_path" --version || "$binary_path" --help || echo "Binary execution test completed"
+                    else
+                      "$binary_path" --version || "$binary_path" --help || echo "Binary execution test completed"
+                    fi
+                  fi
+
+            - name: Calculate file hash
+              id: hash
+              shell: bash
+              run: |
+                  if [[ "${{ matrix.platform.os }}" == "windows-latest" ]]; then
+                    hash=$(powershell -command "(Get-FileHash target/${{ matrix.platform.target }}/release/${{ matrix.platform.binary }} -Algorithm SHA256).Hash.ToLower()")
+                  else
+                    hash=$(shasum -a 256 target/${{ matrix.platform.target }}/release/${{ matrix.platform.binary }} | cut -d ' ' -f 1)
+                  fi
+                  echo "hash=$hash" >> $GITHUB_OUTPUT
+
+            - name: Create archive
+              shell: bash
+              run: |
+                  binary_name="pacor-${{ matrix.platform.name }}"
+                  if [[ "${{ matrix.platform.os }}" == "windows-latest" ]]; then
+                    7z a "${binary_name}.zip" "./target/${{ matrix.platform.target }}/release/${{ matrix.platform.binary }}"
+                    echo "ASSET=${binary_name}.zip" >> $GITHUB_ENV
+                  else
+                    tar -czf "${binary_name}.tar.gz" -C "target/${{ matrix.platform.target }}/release" "${{ matrix.platform.binary }}"
+                    echo "ASSET=${binary_name}.tar.gz" >> $GITHUB_ENV
+                  fi
+
+            - name: Upload artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: ${{ matrix.platform.name }}
+                  path: ${{ env.ASSET }}
+                  retention-days: 1
+
+            - name: Create release info
+              shell: bash
+              run: |
+                  echo "**${{ matrix.platform.name }}**" >> release_info.txt
+                  echo "SHA256: ${{ steps.hash.outputs.hash }}" >> release_info.txt
+                  if [[ "${{ matrix.platform.compress }}" == "true" ]]; then
+                    if [[ "$COMPRESSION_FAILED" == "true" ]]; then
+                      echo "Compression: Failed (uncompressed binary)" >> release_info.txt
+                    else
+                      echo "Compression: UPX --best --lzma (~60% size reduction)" >> release_info.txt
+                    fi
+                  else
+                    echo "Compression: Not applied (macOS)" >> release_info.txt
+                  fi
+                  echo "" >> release_info.txt
+
+            - name: Upload release info
+              uses: actions/upload-artifact@v4
+              with:
+                  name: release-info-${{ matrix.platform.name }}
+                  path: release_info.txt
+                  retention-days: 1
+
+    release:
+        name: Create Release
+        needs: build
+        runs-on: ubuntu-latest
+        if: startsWith(github.ref, 'refs/tags/')
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Download all artifacts
+              uses: actions/download-artifact@v4
+
+            - name: Combine release info
+              run: |
+                  echo "# Release Information" > combined_release_info.md
+                  echo "" >> combined_release_info.md
+                  echo "## Binary Checksums" >> combined_release_info.md
+                  echo "" >> combined_release_info.md
+                  for info_dir in release-info-*/; do
+                    if [ -d "$info_dir" ]; then
+                      cat "$info_dir/release_info.txt" >> combined_release_info.md
+                    fi
+                  done
+
+            - name: Build changelog
+              id: github_release_changelog
+              uses: mikepenz/release-changelog-builder-action@v4
+              with:
+                  configuration: ".github/changelog-configuration.json"
+                  toTag: "refs/heads/main"
+                  failOnError: true
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Create Release
+              run: |
+                  # Save changelog to file to handle special characters properly
+                  cat > release_notes.md << 'EOF'
+                  ${{ steps.github_release_changelog.outputs.changelog }}
+                  EOF
+
+                  gh release create "${{ github.ref_name }}" \
+                    --title "${{ github.ref_name }}" \
+                    --notes-file release_notes.md
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Upload Release Assets
+              run: |
+                  for platform in macOS-x64 macOS-arm64 Linux-x64 Linux-arm64 Windows-x64 Windows-arm64; do
+                    if [ -d "$platform" ]; then
+                      for file in "$platform"/*; do
+                        if [ -f "$file" ]; then
+                          echo "Uploading $file"
+                          gh release upload "${{ github.ref_name }}" "$file" --clobber
+                        fi
+                      done
+                    fi
+                  done
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

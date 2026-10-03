@@ -1,0 +1,31 @@
+[package]
+name = "pacor"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+
+[[bin]]
+name = "pacor"
+path = "src/main.rs"
+
+[lib]
+name = "pacor"
+doctest = false
+
+[dependencies]
+pacor-core.workspace = true
+pacor-packaging.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+colored.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+toml.workspace = true
+serde.workspace = true
+tempfile.workspace = true
+
+[features]
+log-line-number = []

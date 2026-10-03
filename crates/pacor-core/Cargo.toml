@@ -1,0 +1,31 @@
+[lib]
+doctest = false
+
+[package]
+name = "pacor-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core domain model, configuration and shared infrastructure for pacor."
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+toml.workspace = true
+serde_yaml.workspace = true
+tracing.workspace = true
+dirs.workspace = true
+tempfile.workspace = true
+ureq.workspace = true
+walkdir.workspace = true
+zip.workspace = true
+flate2.workspace = true
+tar.workspace = true
+sha1.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+temp-env.workspace = true
