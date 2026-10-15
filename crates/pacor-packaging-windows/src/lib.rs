@@ -1,15 +1,18 @@
 //! Windows application bundler for Flutter projects.
 //!
-//! This module implements the `BundleBuilder` trait to package a Flutter application
-//! for Windows into distributable formats:
-//! - NSIS-based installer (`.exe`)
-//! - Portable ZIP archive
+//! This module implements the `BundleBuilder` trait to package a Flutter
+//! application for Windows into distributable formats:
+//! - NSIS-based installer (`.exe`), see [`nsis`]
+//! - Portable ZIP archive, whose entries live under a single
+//!   `<name>-<version>-<arch>` directory
 //!
-//! It handles:
-//! - Building the Flutter app in release mode
-//! - Locating or downloading NSIS toolchain
-//! - Generating installer scripts from templates
-//! - Creating checksum files for artifacts
+//! Every artifact gets a `.sha1` file next to it. When code signing is
+//! configured ([`signing`]) the application executable is signed *before* the
+//! installer is compiled, because NSIS embeds the file contents: signing
+//! afterwards would leave the installed copy unsigned.
+//!
+//! Both the executable name and the default copyright are read from the Flutter
+//! runner project (see [`runner`]) rather than assumed to match `pubspec.yaml`.
 //!
 //! The builder assumes a standard Flutter Windows project layout
 //! (e.g., `windows/runner/resources/app_icon.ico`).
@@ -19,28 +22,30 @@
 #[macro_use]
 extern crate tracing;
 
+mod flutter;
 mod nsis;
+mod runner;
 
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+#[cfg(test)]
+pub(crate) mod test_support;
 
-use anyhow::{Context, Result, anyhow};
+use std::path::{Path, PathBuf};
+
+use anyhow::{Result, anyhow};
 
 use pacor_core::{
-    config::{AppConfig, InstallerFormat, PacorConfig, WindowsConfig},
+    config::{FlutterBuildMode, InstallerFormat, PacorConfig, WindowsConfig},
     core::{
         arch::Arch,
         builder::BundleBuilder,
         project::{FlutterProject, find_flutter_project_root},
     },
-    error::{BuildError, ConfigurationError, PlatformError},
+    error::{ConfigurationError, PlatformError, ValidationError},
     platforms::{BuildArtifact, Platform},
     utils::{
-        archive::create_zip_archive,
+        archive::create_zip_archive_under,
         command::{CommandOutputMode, execute_command, find_command_path, macros::command_args},
-        fs::ensure_directory_exists,
+        fs::{clean_dir, ensure_directory_exists},
     },
 };
 
@@ -48,7 +53,7 @@ use crate::nsis::NsisBuilder;
 
 pub struct WindowsBuilder<'a> {
     /// Common builder functionality
-    app_config: &'a AppConfig,
+    config: &'a PacorConfig,
     windows_config: &'a WindowsConfig,
 
     flutter_project: FlutterProject,
@@ -60,6 +65,7 @@ pub struct WindowsBuilder<'a> {
     tools_dir: PathBuf,
 
     target_arch: Arch,
+    build_mode: FlutterBuildMode,
 }
 
 impl<'a> BundleBuilder for WindowsBuilder<'a> {
@@ -85,11 +91,16 @@ impl<'a> BundleBuilder for WindowsBuilder<'a> {
         }
 
         let arch = Arch::current()?;
+        let build_mode = config.build.flutter_build_mode;
 
         let project_root = find_flutter_project_root()?;
         let flutter_project = FlutterProject::load_from_pubspec(&project_root)?;
-        let flutter_build_output_dir =
-            flutter_project.get_flutter_build_path(&project_root, Platform::Windows, &arch);
+        let flutter_build_output_dir = flutter_project.get_flutter_build_path_for_mode(
+            &project_root,
+            Platform::Windows,
+            &arch,
+            build_mode,
+        );
 
         let output_directory = config.output_dir()?;
 
@@ -104,13 +115,14 @@ impl<'a> BundleBuilder for WindowsBuilder<'a> {
             project = %flutter_project.name(),
             version = %flutter_project.version(),
             arch = %arch,
+            mode = %build_mode,
             output_dir = %output_directory.display(),
             tools_dir = %tools_dir.display(),
             "Initializing Windows builder"
         );
 
         Ok(Self {
-            app_config: &config.app,
+            config,
             windows_config,
 
             project_root,
@@ -121,6 +133,7 @@ impl<'a> BundleBuilder for WindowsBuilder<'a> {
             tools_dir,
 
             target_arch: arch,
+            build_mode,
         })
     }
 
@@ -130,11 +143,7 @@ impl<'a> BundleBuilder for WindowsBuilder<'a> {
         let required_tools = ["flutter"];
         let pubspec_path = self.project_root.join("pubspec.yaml");
         let windows_path = self.project_root.join("windows");
-        let required_files = [
-            pubspec_path.as_path(),
-            windows_path.as_path(),
-            &self.application_icon_path(),
-        ];
+        let required_files = [pubspec_path.as_path(), windows_path.as_path()];
 
         pacor_core::packaging::validate_build_environment(
             "Windows",
@@ -142,6 +151,20 @@ impl<'a> BundleBuilder for WindowsBuilder<'a> {
             &required_files,
             &self.output_directory,
         )?;
+
+        // NSIS uses the runner icon for the installer and the shortcuts, so it
+        // cannot be replaced by a placeholder.
+        let icon_path = self.application_icon_path();
+        if !icon_path.exists() {
+            return Err(ValidationError::FileValidation {
+                file: icon_path,
+                reason: "the Windows runner icon is required as the installer icon; restore \
+                         windows/runner/resources/app_icon.ico (for example with \
+                         `flutter create --platforms=windows .`)"
+                    .to_string(),
+            }
+            .into());
+        }
 
         // Validate signing config
         if self.should_sign_binaries() {
@@ -170,7 +193,9 @@ impl<'a> BundleBuilder for WindowsBuilder<'a> {
 
         // TODO: Remove this when MSI support is implemented
         if matches!(self.windows_config.installer_format(), InstallerFormat::Msi) {
-            return Err(anyhow!("MSI installer support is not implemented yet"));
+            return Err(anyhow!(
+                "MSI installer support is not implemented yet; use `installer_format = \"nsis\"`"
+            ));
         }
 
         // Ensure output directory exists and validate permissions
@@ -182,10 +207,15 @@ impl<'a> BundleBuilder for WindowsBuilder<'a> {
         trace!(output_dir = %self.output_directory.display(), "Output directory ensured");
 
         if !skip_flutter_build {
-            self.build_flutter_application(&command_output_mode)?;
+            flutter::build(&self.project_root, self.build_mode, &command_output_mode)?;
         } else {
             info!("Skipping Flutter build as requested by user");
         }
+
+        // Everything below packages this executable, so resolve it once and
+        // fail early with a useful message when it is not there.
+        let executable = self.main_executable_path()?;
+        debug!(executable = %executable.display(), "Application executable located");
 
         let installer_artifact = self.build_installer(&command_output_mode)?;
         let mut artifacts = vec![installer_artifact];
@@ -201,7 +231,13 @@ impl<'a> BundleBuilder for WindowsBuilder<'a> {
     /// Cleans the build directory
     fn clean(&self) -> Result<()> {
         pacor_core::packaging::clean_directory_contents(self.flutter_build_path())?;
-        pacor_core::packaging::clean_directory_contents(&self.project_root().join("tmp"))?;
+
+        // `--split-debug-info=tmp/` writes the symbols next to the project.
+        let symbols_dir = self.project_root.join(flutter::SYMBOLS_DIR);
+        if symbols_dir.exists() {
+            clean_dir(&symbols_dir)?;
+            debug!(path = %symbols_dir.display(), "Removed split debug symbols");
+        }
 
         Ok(())
     }
@@ -227,95 +263,57 @@ impl WindowsBuilder<'_> {
             .join("app_icon.ico")
     }
 
-    /// Finds the main `.exe` file in the Flutter build output.
-    fn find_main_executable_name(&self) -> Result<String> {
-        trace!(build_dir = %self.flutter_build_path().display(), "Scanning for main executable");
+    /// Finds the application executable in the Flutter build output.
+    fn main_executable_path(&self) -> Result<PathBuf> {
+        let cmake_binary_name = runner::binary_name_from_cmake(
+            &self.project_root.join("windows").join("CMakeLists.txt"),
+        );
 
-        let dir = fs::read_dir(self.flutter_build_path())
-            .context("Failed to read build output directory")?;
-
-        let target_filename = format!("{}.exe", self.flutter_project.name());
-
-        for entry in dir {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_file()
-                && path.extension().is_some_and(|ext| ext == "exe")
-                && let Some(filename) = path.file_name().and_then(|n| n.to_str())
-                && filename == target_filename
-            {
-                debug!(executable = %filename, path = %path.display(), "Detected main executable");
-                return Ok(filename.to_string());
-            }
-        }
-
-        Err(BuildError::ExecutableNotFound.into())
+        runner::find_main_executable(
+            self.flutter_build_path(),
+            cmake_binary_name.as_deref(),
+            self.flutter_project.name(),
+        )
     }
 
-    /// Gets the default copyright string from the Runner.rc file.
+    /// Name of the application executable, relative to the build output.
+    fn find_main_executable_name(&self) -> Result<String> {
+        let path = self.main_executable_path()?;
+
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .map(ToString::to_string)
+            .ok_or_else(|| {
+                PlatformError::InvalidConfiguration {
+                    platform: "Windows".to_string(),
+                    reason: format!("{} has no usable file name", path.display()),
+                }
+                .into()
+            })
+    }
+
+    /// The copyright `flutter create` wrote into `Runner.rc`, if any.
     ///
-    /// Returns the first `LegalCopyright` line found in the Runner.rc file, such as:
-    ///
-    /// ```
-    ///     VALUE "LegalCopyright", "Copyright (C) 2025 com.YourCompany. All rights reserved." "\0"
-    /// ```
-    fn get_default_legal_copyright(&self) -> Result<String> {
+    /// Only a fallback for the localized `copyright` metadata, so an unreadable
+    /// or unusual `Runner.rc` is not an error.
+    fn get_default_legal_copyright(&self) -> Option<String> {
         let runner_rc = self
             .project_root
             .join("windows")
             .join("runner")
             .join("Runner.rc");
 
-        if !runner_rc.exists() {
-            return Err(PlatformError::FileNotFound { path: runner_rc }.into());
+        match runner::read_text_file(&runner_rc) {
+            Ok(contents) => runner::parse_legal_copyright(&contents),
+            Err(error) => {
+                debug!(
+                    path = %runner_rc.display(),
+                    error = %error,
+                    "No default copyright available from Runner.rc"
+                );
+                None
+            }
         }
-
-        let contents = fs::read_to_string(runner_rc)?;
-        if let Some(copyright) = contents
-            .lines()
-            .find(|line| line.contains("VALUE \"LegalCopyright\", "))
-        {
-            return Ok(copyright
-                .trim()
-                .replace("VALUE \"LegalCopyright\", \"", "")
-                .replace(".\" \"\\0\"", "")
-                .trim()
-                .to_string());
-        }
-
-        Err(PlatformError::InvalidConfiguration {
-            platform: "Windows".to_string(),
-            reason: "Could not find copyright information in Runner.rc".to_string(),
-        }
-        .into())
-    }
-
-    /// Builds the Windows application in release mode
-    fn build_flutter_application(&self, command_output_mode: &CommandOutputMode) -> Result<()> {
-        info!("Building Flutter application for Windows in release mode");
-
-        let symbols_dir = tempfile::TempDir::with_prefix("pacor-flutter-symbols-")?;
-
-        let args = command_args![
-            "windows",
-            "--release",
-            "--obfuscate",
-            "--split-debug-info",
-            symbols_dir.path(),
-        ];
-
-        pacor_core::packaging::flutter_build(
-            &args,
-            &self.project_root,
-            command_output_mode,
-            "windows",
-        )?;
-
-        info!(
-            build_path = %self.flutter_build_path().display(),
-            "Windows app built successfully"
-        );
-        Ok(())
     }
 
     /// Builds the NSIS installer
@@ -324,7 +322,7 @@ impl WindowsBuilder<'_> {
         command_output_mode: &CommandOutputMode,
     ) -> Result<BuildArtifact> {
         // The tag is part of the path: the templates cached here are only valid
-        // for the contract pacor pins, and `download_files_parallel` skips files
+        // for the contract pacor pins, and `ensure_template_files` skips files
         // that already exist. Without the tag a newer pacor would silently keep
         // using the previous tag's templates.
         let nsis_install_dir = self
@@ -332,14 +330,12 @@ impl WindowsBuilder<'_> {
             .join("nsis")
             .join(pacor_core::tools::TEMPLATE_REF);
 
+        let executable_name = self.find_main_executable_name()?;
+        let default_legal_copyright = self.get_default_legal_copyright().unwrap_or_default();
         let icon_path = self.application_icon_path();
 
-        let executable_name = self.find_main_executable_name()?;
-
-        let default_legal_copyright = self.get_default_legal_copyright()?;
-
         let builder = NsisBuilder::new(
-            self.app_config,
+            &self.config.app,
             &self.project_root,
             &self.flutter_project,
             &nsis_install_dir,
@@ -361,13 +357,13 @@ impl WindowsBuilder<'_> {
             self.sign_binary(artifact.file(), command_output_mode)?;
         }
 
-        // TODO: move to clean()?
-        builder.clean()?;
-
         Ok(artifact)
     }
 
     /// Builds a portable ZIP archive of the application.
+    ///
+    /// The archive holds a single top-level directory, so extracting it cannot
+    /// scatter the application into an unrelated folder.
     fn build_portable_archive(
         &self,
         command_output_mode: &CommandOutputMode,
@@ -391,9 +387,19 @@ impl WindowsBuilder<'_> {
         );
 
         let zip_path = self.output_directory.join(artifact_name);
+        let archive_root = pacor_core::packaging::artifact_base_name(
+            self.flutter_project.name(),
+            self.flutter_project.version(),
+            &self.target_arch,
+        );
 
-        create_zip_archive(self.flutter_build_path(), &zip_path)?;
-        debug!(source = %self.flutter_build_path().display(), archive = %zip_path.display(), "ZIP archive created");
+        create_zip_archive_under(self.flutter_build_path(), Some(&archive_root), &zip_path)?;
+        debug!(
+            source = %self.flutter_build_path().display(),
+            archive = %zip_path.display(),
+            root = %archive_root,
+            "ZIP archive created"
+        );
 
         // Use common artifact creation functionality
         let artifact = pacor_core::packaging::create_artifact_with_checksum(zip_path)?;

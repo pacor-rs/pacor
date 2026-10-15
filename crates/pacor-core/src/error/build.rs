@@ -1,8 +1,10 @@
+use std::path::PathBuf;
+
 /// Build process errors with specific context.
 #[derive(thiserror::Error, Debug)]
 pub enum BuildError {
-    #[error("No executable file found in build output")]
-    ExecutableNotFound,
+    #[error("No application executable found in {}", directory.display())]
+    ExecutableNotFound { directory: PathBuf },
 
     #[error("[{platform}] Flutter build failed with exit code: {output}")]
     FlutterBuild { output: String, platform: String },

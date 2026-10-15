@@ -36,7 +36,8 @@ publisher = "我的公司"
 copyright = "版权所有 © 2025 我的公司。保留所有权利。"
 
 [build]
-# release | debug | profile
+# release | debug | profile. Drives `flutter build --<mode>` and the directory
+# the bundle is read from, e.g. build/windows/x64/runner/Release.
 flutter_build_mode = "release"
 output_dir = "dist"
 
@@ -84,6 +85,8 @@ categories = [{ Main = "Utility" }]
 enabled = true
 installer_format = "nsis"      # nsis | msi (msi not implemented yet)
 build_portable = true
+# Portable archives contain a single top-level directory named
+# `<name>-<version>-<arch>`, so extracting one cannot scatter the application.
 # signing_tool_path = "C:/Program Files (x86)/Windows Kits/10/bin/signtool.exe"
 # certificate_path = "cert.pfx"
 # Prefer the PACOR_WINDOWS_CERT_PASSWORD environment variable over a literal.

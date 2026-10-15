@@ -1,42 +1,68 @@
+//! Rendering of the pinned NSIS template into an installer script.
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::{fs, io, thread};
+use std::{fs, io};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use pacor_core::error::{BuildError, Error};
-use pacor_core::utils::downloader::download_file;
-use pacor_core::utils::fs::ensure_directory_exists;
 use pacor_core::utils::template::render_template;
 use pacor_core::{config::AppConfig, i18n::Locale};
 
-/// URL of an NSIS template inside the tag pacor pins.
-///
-/// The templates and the code that renders them are versioned together, so a
-/// template change cannot reach a build that does not understand it.
-fn nsis_template_url(file: &str) -> String {
-    pacor_core::tools::template_url(&format!("windows/nsis/{file}"))
-}
-
-/// Required NSIS files that must be downloaded for installer generation
-const NSIS_REQUIRED_FILES: &[&str] = &[
-    "template.nsi",
-    "Plugins/nsProcess.nsh",
-    "Plugins/nsProcess.dll",
-];
-
 /// Returns the NSIS language code for a locale.
+///
+/// Also used by [`crate::nsis`] to fetch exactly the language files the script
+/// will include.
 ///
 /// # References
 /// - [NSIS Language Examples](https://nsis.sourceforge.io/Examples/languages.nsi)
 /// - [Modern UI Multi-Language](https://nsis.sourceforge.io/Examples/Modern%20UI/MultiLanguage.nsi)
-fn nsis_lang_code(locale: &Locale) -> &'static str {
+pub(super) fn nsis_lang_code(locale: &Locale) -> &'static str {
     match locale {
         Locale::EnUs | Locale::EnGb => "English",
         Locale::ZhCn => "SimpChinese",
         Locale::ZhTw => "TradChinese",
         Locale::JaJp => "Japanese",
     }
+}
+
+/// Converts an NSIS language code to its constant identifier.
+///
+/// The MUI language files define `${LANG_ENGLISH}`, `${LANG_SIMPCHINESE}`, … so
+/// the constant is the upper-cased language name with a `LANG_` prefix.
+fn nsis_lang_constant(lang_code: &str) -> String {
+    format!("LANG_{}", lang_code.to_uppercase())
+}
+
+/// Highest value NSIS accepts for one `VIProductVersion` component.
+const NSIS_VERSION_COMPONENT_MAX: u32 = u16::MAX as u32;
+
+/// Converts a pubspec version into the `X.X.X.X` form `VIProductVersion` needs.
+///
+/// Pubspec versions are semver, and Flutter's default is `1.0.0+1`: the build
+/// number is a separate field, so it becomes the fourth component
+/// (`1.0.0.1`). Pre-release identifiers are dropped (`1.2.0-beta.1+7` becomes
+/// `1.2.0.7`) and components are clamped, because Windows version fields are
+/// 16-bit.
+fn nsis_product_version(version: &str) -> String {
+    /// Parses one dotted component, ignoring anything non-numeric.
+    fn component(value: &str) -> Option<u32> {
+        let digits: String = value.chars().take_while(char::is_ascii_digit).collect();
+        digits.parse().ok()
+    }
+
+    let (base, build) = version.split_once('+').unwrap_or((version, ""));
+
+    let mut components: Vec<u32> = base.split('.').map_while(component).take(3).collect();
+    components.resize(3, 0);
+    components.push(component(build).unwrap_or(0));
+
+    components
+        .iter()
+        .map(|component| component.min(&NSIS_VERSION_COMPONENT_MAX).to_string())
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 /// Encapsulates all language-specific content for NSIS script generation.
@@ -60,9 +86,12 @@ struct LanguageContent {
 /// Generator for NSIS (Nullsoft Scriptable Install System) installer scripts.
 ///
 /// This generator creates Windows installer packages by:
-/// 1. Downloading required NSIS tools and language files
+/// 1. Reading the NSIS template cached from the pinned tag
 /// 2. Generating localized content for all supported languages
-/// 3. Rendering the final installer script from a template
+/// 3. Rendering the final installer script
+///
+/// The template files themselves are provisioned by
+/// [`crate::nsis::NsisBuilder`], which keeps this module free of network access.
 #[derive(Debug)]
 pub(super) struct NSISGenerator<'a> {
     /// Application configuration containing metadata and localization info
@@ -86,7 +115,7 @@ pub(super) struct NSISGenerator<'a> {
     /// Default copyright notice
     pub(super) default_legal_copyright: &'a str,
 
-    /// Directory where NSIS tools and templates are installed
+    /// Directory where NSIS tools and templates are cached
     pub(super) nsis_install_dir: &'a Path,
 
     /// Path to the application icon file
@@ -100,204 +129,6 @@ pub(super) struct NSISGenerator<'a> {
 }
 
 impl<'a> NSISGenerator<'a> {
-    /// Downloads a file from the given URL and saves it to the specified path.
-    ///
-    /// # Arguments
-    /// * `url` - The URL to download from
-    /// * `path` - The local path where the file should be saved
-    ///
-    /// # Errors
-    /// Returns an error if the download fails or the file cannot be written.
-    fn download_and_save(url: String, path: PathBuf) -> Result<()> {
-        debug!("Downloading file from {} to {}", url, path.display());
-
-        download_file(&url)
-            .and_then(|data| {
-                debug!(
-                    "Successfully downloaded {} bytes, writing to {}",
-                    data.len(),
-                    path.display()
-                );
-                fs::write(&path, data)
-                    .map_err(Error::Io)
-                    .context("Failed to write file")
-            })
-            .map_err(|e| {
-                error!(
-                    "Failed to download/save file from {} to {}: {}",
-                    url,
-                    path.display(),
-                    e
-                );
-                e
-            })?;
-
-        info!("Successfully saved file to {}", path.display());
-        Ok(())
-    }
-
-    /// Downloads multiple files in parallel using scoped threads.
-    ///
-    /// This method optimizes download performance by parallelizing network operations.
-    /// Files that already exist on disk are skipped.
-    ///
-    /// # Type Parameters
-    /// * `I` - An iterator over items to download
-    /// * `F` - A function that maps each item to a (URL, path) tuple
-    ///
-    /// # Arguments
-    /// * `items` - Collection of items to process
-    /// * `url_path_mapper` - Function that converts each item to a URL and destination path
-    ///
-    /// # Errors
-    /// Returns an error if any download fails or if thread operations fail.
-    fn download_files_parallel<I, F>(&self, items: I, url_path_mapper: F) -> Result<()>
-    where
-        I: IntoIterator,
-        I::Item: Send + 'static,
-        F: Fn(&I::Item) -> (String, PathBuf) + Send + Sync + 'static,
-    {
-        let items_vec: Vec<_> = items.into_iter().collect();
-        let total_items = items_vec.len();
-
-        debug!("Starting parallel download of {} files", total_items);
-
-        thread::scope(|scope| {
-            let download_handles: Vec<_> = items_vec
-                .into_iter()
-                .enumerate()
-                .filter_map(|(index, item)| {
-                    let (url, path) = url_path_mapper(&item);
-
-                    // Skip files that already exist
-                    if path.exists() {
-                        debug!(
-                            "File [{}/{}] already exists, skipping: {}",
-                            index + 1,
-                            total_items,
-                            path.display()
-                        );
-                        return None;
-                    }
-
-                    // Ensure parent directory exists before spawning download thread
-                    if let Some(parent) = path.parent()
-                        && let Err(e) = ensure_directory_exists(parent)
-                    {
-                        error!(
-                            "Failed to create directory {} for file {}: {}",
-                            parent.display(),
-                            path.display(),
-                            e
-                        );
-                        return None;
-                    }
-
-                    debug!(
-                        "Spawning download thread [{}/{}] for {}",
-                        index + 1,
-                        total_items,
-                        url
-                    );
-                    Some(scope.spawn(move || Self::download_and_save(url, path)))
-                })
-                .collect();
-
-            let active_downloads = download_handles.len();
-            debug!(
-                "Waiting for {} active downloads to complete",
-                active_downloads
-            );
-
-            // Wait for all downloads to complete and collect results
-            for (index, handle) in download_handles.into_iter().enumerate() {
-                handle.join().map_err(|e| {
-                    error!("Download thread {} panicked: {:?}", index + 1, e);
-                    Error::Threading(format!("Download thread panicked: {:?}", e))
-                })??;
-                debug!(
-                    "Download thread [{}/{}] completed",
-                    index + 1,
-                    active_downloads
-                );
-            }
-
-            debug!(
-                "Successfully completed {} parallel downloads",
-                active_downloads
-            );
-            Ok::<(), anyhow::Error>(())
-        })?;
-
-        Ok(())
-    }
-
-    /// Downloads and prepares all required NSIS files.
-    ///
-    /// This includes:
-    /// - Core NSIS template and plugin files
-    /// - Language files for all configured i18n
-    ///
-    /// # Errors
-    /// Returns an error if any required file cannot be downloaded.
-    fn prepare_required_nsis_files(&self) -> Result<()> {
-        info!(
-            repository = pacor_core::tools::TOOLS_REPOSITORY,
-            tag = pacor_core::tools::TEMPLATE_REF,
-            "Preparing required NSIS files"
-        );
-
-        // Download core NSIS files
-        debug!(
-            "Downloading {} core NSIS files...",
-            NSIS_REQUIRED_FILES.len()
-        );
-        let nsis_dir = self.nsis_install_dir.to_path_buf();
-
-        self.download_files_parallel(
-            NSIS_REQUIRED_FILES.iter().map(|s| s.to_string()),
-            move |file: &String| {
-                let path = nsis_dir.join(file);
-                (nsis_template_url(file), path)
-            },
-        )?;
-
-        // Download language files for all configured locales
-        let languages_dir = self.nsis_install_dir.join("languages");
-        debug!("Creating languages directory: {}", languages_dir.display());
-        ensure_directory_exists(&languages_dir)?;
-
-        let mut locales: Vec<_> = self.app_config.i18n().keys().cloned().collect();
-        locales.sort();
-        debug!(
-            "Downloading language files for {} locales: {:?}",
-            locales.len(),
-            locales
-        );
-
-        self.download_files_parallel(locales, move |locale: &Locale| {
-            let lang_code = nsis_lang_code(locale);
-            let filename = format!("{}.nsh", lang_code);
-            let url = nsis_template_url(&format!("languages/{filename}"));
-            let path = languages_dir.join(filename);
-            (url, path)
-        })?;
-
-        info!("Successfully prepared all required NSIS files");
-
-        Ok(())
-    }
-
-    /// Converts an NSIS language code to its corresponding constant identifier.
-    ///
-    /// # Example
-    /// ```
-    /// assert_eq!(get_nsis_lang_constant("English"), "LANG_ENGLISH");
-    /// ```
-    fn get_nsis_lang_constant(lang_code: &str) -> String {
-        format!("LANG_{}", lang_code.to_uppercase())
-    }
-
     /// Generates all language-specific content for the NSIS script in a single pass.
     ///
     /// This method efficiently processes all localized metadata and produces:
@@ -328,12 +159,12 @@ impl<'a> NSISGenerator<'a> {
         );
 
         let mut language_includes = Vec::with_capacity(locale_count);
-        language_includes.push(format!(
-            "!include \"${{NSISDIR}}\\languages\\{}.nsh\"",
-            default_lang_code
-        ));
+        language_includes.push(self.language_include(default_lang_code));
 
-        let mut version_info_lines = vec![format!("VIProductVersion \"{}.0\"", self.version)];
+        let mut version_info_lines = vec![format!(
+            "VIProductVersion \"{}\"",
+            nsis_product_version(self.version)
+        )];
         let mut localized_strings = Vec::with_capacity(locale_count);
 
         // Generate all content in a single iteration
@@ -341,7 +172,7 @@ impl<'a> NSISGenerator<'a> {
         locales.sort_by_key(|(locale, _)| (*locale).clone());
         for (locale, metadata) in locales {
             let lang_code = nsis_lang_code(locale);
-            let nsis_lang_const = Self::get_nsis_lang_constant(lang_code);
+            let nsis_lang_const = nsis_lang_constant(lang_code);
 
             debug!(
                 "Processing locale: {} - Name: {}, Publisher: {}",
@@ -355,10 +186,7 @@ impl<'a> NSISGenerator<'a> {
 
             // 2. Language file includes (skip default locale as it's already included)
             if locale != self.app_config.default_locale() {
-                language_includes.push(format!(
-                    "!include \"${{NSISDIR}}\\languages\\{}.nsh\"",
-                    lang_code
-                ));
+                language_includes.push(self.language_include(lang_code));
             }
 
             // 3. Version information block
@@ -419,6 +247,23 @@ impl<'a> NSISGenerator<'a> {
             version_info_blocks: version_info_lines.join("\n"),
             localized_strings: localized_strings.join("\n"),
         }
+    }
+
+    /// `!include` directive for one language's installer strings.
+    ///
+    /// The template uses `SECTION_*`, `DESC_*`, `SHORTCUT_*` and `MSG_*`
+    /// LangStrings that NSIS does not define: they come from the
+    /// `languages/<NSIS language>.nsh` files of the pinned tag, which live in
+    /// pacor's cache. The path therefore has to be absolute — the template's own
+    /// example points at `${NSISDIR}\languages`, a directory NSIS does not ship
+    /// (`Contrib\Language files` holds the MUI language files instead).
+    fn language_include(&self, lang_code: &str) -> String {
+        let path = self
+            .nsis_install_dir
+            .join("languages")
+            .join(format!("{lang_code}.nsh"));
+
+        format!("!include \"{}\"", path.display())
     }
 
     /// Renders the NSIS script by replacing placeholders in the template.
@@ -484,20 +329,17 @@ impl<'a> NSISGenerator<'a> {
     /// Generates the complete NSIS installer script.
     ///
     /// This is the main entry point for NSIS script generation. It:
-    /// 1. Downloads required NSIS files
-    /// 2. Reads the template
-    /// 3. Generates localized content
-    /// 4. Renders and saves the final script
+    /// 1. Reads the template cached from the pinned tag
+    /// 2. Generates localized content
+    /// 3. Renders and saves the final script
     ///
     /// # Returns
     /// The path to the generated NSIS script file.
     ///
     /// # Errors
-    /// Returns an error if any step in the generation process fails.
+    /// Returns an error if the template cannot be read or rendered.
     pub(super) fn generate(&self, temp_dir: &Path) -> Result<PathBuf> {
         info!("Starting NSIS installer script generation...");
-
-        self.prepare_required_nsis_files()?;
 
         let template_path = self.nsis_install_dir.join("template.nsi");
         let template_content = fs::read_to_string(&template_path).map_err(|e| {
@@ -545,9 +387,97 @@ impl<'a> NSISGenerator<'a> {
 mod tests {
     use super::*;
 
+    use crate::test_support::{
+        app_config, bilingual_config, require_nsis_toolchain, write_minimal_icon,
+    };
+    use pacor_core::i18n::Locale;
+
+    /// A generator whose paths are only ever inspected, never touched.
+    fn generator<'a>(app_config: &'a AppConfig, nsis_install_dir: &'a Path) -> NSISGenerator<'a> {
+        NSISGenerator {
+            app_config,
+            app_name: "my_app",
+            default_description: "desc",
+            version: "1.0.0+1",
+            executable_name: "my_app.exe",
+            installer_name: "my_app-1.0.0+1-x64-setup.exe",
+            default_legal_copyright: "Copyright",
+            nsis_install_dir,
+            icon_path: Path::new("/project/windows/runner/resources/app_icon.ico"),
+            build_output_dir: Path::new("/project/build/windows/x64/runner/Release"),
+            installer_output_dir: Path::new("/project/dist"),
+        }
+    }
+
+    fn english_config() -> AppConfig {
+        app_config(&[Locale::EnUs])
+    }
+
+    #[test]
+    fn nsis_lang_constant_matches_the_mui_defines() {
+        assert_eq!(nsis_lang_constant("English"), "LANG_ENGLISH");
+        assert_eq!(nsis_lang_constant("SimpChinese"), "LANG_SIMPCHINESE");
+        assert_eq!(nsis_lang_constant("TradChinese"), "LANG_TRADCHINESE");
+        assert_eq!(nsis_lang_constant("Japanese"), "LANG_JAPANESE");
+    }
+
+    /// `VIProductVersion` rejects anything but four numeric components, and the
+    /// Flutter default version is `1.0.0+1`.
+    #[test]
+    fn the_product_version_is_always_four_numeric_components() {
+        for (version, expected) in [
+            ("1.0.0+1", "1.0.0.1"),
+            ("1.0.0", "1.0.0.0"),
+            ("2.3.4+56", "2.3.4.56"),
+            ("1.0.0-beta.1+7", "1.0.0.7"),
+            ("1.2", "1.2.0.0"),
+            ("1", "1.0.0.0"),
+            ("", "0.0.0.0"),
+            ("1.0.0+", "1.0.0.0"),
+        ] {
+            let rendered = nsis_product_version(version);
+
+            assert_eq!(rendered, expected, "version {version:?}");
+            assert_eq!(
+                rendered.split('.').count(),
+                4,
+                "version {version:?} produced {rendered}"
+            );
+            assert!(
+                rendered
+                    .split('.')
+                    .all(|part| part.parse::<u32>().is_ok_and(|n| n <= u32::from(u16::MAX))),
+                "version {version:?} produced out-of-range components: {rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn oversized_version_components_are_clamped() {
+        assert_eq!(nsis_product_version("70000.0.0+80000"), "65535.0.0.65535");
+    }
+
+    /// The template's own example (`${NSISDIR}\languages\…`) points at a
+    /// directory NSIS does not ship; the strings the template needs come from
+    /// the pinned tag, which lives in pacor's cache.
+    #[test]
+    fn language_includes_point_into_the_cache() {
+        let config = english_config();
+        // Spelt out the same way `language_include` builds the path, so the
+        // assertion holds on hosts that use a different separator.
+        let expected = Path::new("/cache/windows/nsis/v1")
+            .join("languages")
+            .join("SimpChinese.nsh");
+
+        assert_eq!(
+            generator(&config, Path::new("/cache/windows/nsis/v1")).language_include("SimpChinese"),
+            format!("!include \"{}\"", expected.display())
+        );
+    }
+
     #[test]
     fn nsis_files_are_fetched_from_the_pinned_tag() {
-        let url = nsis_template_url("template.nsi");
+        let url = pacor_core::tools::template_url("windows/nsis/template.nsi");
 
         assert!(url.contains(pacor_core::tools::TEMPLATE_REF), "{url}");
         assert!(url.contains("/refs/tags/"), "{url}");
@@ -562,9 +492,155 @@ mod tests {
             "Plugins/nsProcess.dll",
             "languages/SimpChinese.nsh",
         ] {
-            let url = nsis_template_url(file);
+            let url = pacor_core::tools::template_url(&format!("windows/nsis/{file}"));
             assert!(url.contains(pacor_core::tools::TEMPLATE_REF), "{url}");
             assert!(url.ends_with(&format!("/windows/nsis/{file}")), "{url}");
         }
+    }
+
+    /// Renders a stand-in for the pinned template that uses every placeholder
+    /// the real one uses, so a missing replacement fails here rather than at
+    /// `makensis` time.
+    #[test]
+    fn rendering_fills_every_placeholder_the_template_uses() {
+        let app_config = bilingual_config();
+        let generator = generator(&app_config, Path::new("/cache/nsis/v1"));
+
+        let script = generator
+            .render_nsis_script(
+                "{{LANGUAGE_MACROS}}\n{{LANGUAGE_STRINGS}}\n{{LANGUAGE_INCLUDE}}\n\
+                 !define APP_NAME \"{{APP_NAME}}\"\n\
+                 !define APP_VERSION \"{{APP_VERSION}}\"\n\
+                 !define APP_URL \"{{APP_URL}}\"\n\
+                 !define APP_EXECUTABLE \"{{APP_EXECUTABLE}}\"\n\
+                 !define APP_ICON \"{{APP_ICON_PATH}}\"\n\
+                 !define BUILD_OUTPUT_DIR \"{{BUILD_OUTPUT_DIR}}\"\n\
+                 !define INSTALLER_OUTPUT_PATH \"{{INSTALLER_OUTPUT_PATH}}\"\n\
+                 {{VERSION_INFO}}",
+            )
+            .expect("every placeholder must be provided");
+
+        assert!(script.contains("!define APP_NAME \"my_app\""), "{script}");
+        assert!(
+            script.contains("!define APP_VERSION \"1.0.0+1\""),
+            "the user-visible version keeps the build number: {script}"
+        );
+        assert!(
+            script.contains(&format!(
+                "!define BUILD_OUTPUT_DIR \"{}\"",
+                generator.build_output_dir.display()
+            )),
+            "{script}"
+        );
+        assert!(
+            script.contains(&format!(
+                "!define INSTALLER_OUTPUT_PATH \"{}\"",
+                generator
+                    .installer_output_dir
+                    .join(generator.installer_name)
+                    .display()
+            )),
+            "{script}"
+        );
+        assert!(
+            script.contains("!insertmacro MUI_LANGUAGE \"English\"")
+                && script.contains("!insertmacro MUI_LANGUAGE \"SimpChinese\""),
+            "{script}"
+        );
+        // The default locale is included first so its strings exist earliest.
+        let english = script.find("English.nsh").expect("english include");
+        let chinese = script.find("SimpChinese.nsh").expect("chinese include");
+        assert!(english < chinese, "{script}");
+        assert!(
+            script.contains("VIProductVersion \"1.0.0.1\""),
+            "the product version must be numeric: {script}"
+        );
+        assert!(
+            script.contains("LangString APP_DISPLAY_NAME ${LANG_SIMPCHINESE} \"我的应用\""),
+            "{script}"
+        );
+        assert!(
+            script.contains(
+                "VIAddVersionKey /LANG=${LANG_ENGLISH} \"CompanyName\" \"Publisher Name\""
+            ),
+            "{script}"
+        );
+        assert!(!script.contains("{{"), "unreplaced placeholder: {script}");
+    }
+
+    /// Compiles the rendered script with a real `makensis`.
+    ///
+    /// Ignored by default because it needs a local NSIS toolchain; see
+    /// [`require_nsis_toolchain`] and `docs/WINDOWS.md`.
+    #[test]
+    #[ignore = "requires an NSIS toolchain; set PACOR_NSIS_TOOLCHAIN_DIR"]
+    fn the_rendered_script_compiles_with_makensis() {
+        use std::process::Command;
+
+        use crate::nsis::{install_plugin_dll, stage_plugin_include};
+
+        let toolchain = require_nsis_toolchain();
+        let makensis = toolchain.join("makensis.exe");
+
+        let temp = tempfile::TempDir::new().unwrap();
+
+        // A stand-in for the Flutter build output: the installer only needs
+        // files it can embed.
+        let build_dir = temp.path().join("build/windows/x64/runner/Release");
+        fs::create_dir_all(build_dir.join("data")).unwrap();
+        fs::write(build_dir.join("my_app.exe"), b"stub executable").unwrap();
+        fs::write(build_dir.join("data/app.so"), b"stub library").unwrap();
+
+        let installer_output_dir = temp.path().join("dist");
+        fs::create_dir_all(&installer_output_dir).unwrap();
+
+        let icon_path = temp.path().join("app_icon.ico");
+        write_minimal_icon(&icon_path);
+
+        // Both plugin files have to be prepared exactly as a build would: the
+        // include next to the script, the DLL in the plugin directory.
+        stage_plugin_include(&toolchain, temp.path()).unwrap();
+        install_plugin_dll(&toolchain, &toolchain).unwrap();
+
+        let config = bilingual_config();
+        let generator = NSISGenerator {
+            app_config: &config,
+            app_name: "my_app",
+            default_description: "A Flutter application",
+            version: "1.0.0+1",
+            executable_name: "my_app.exe",
+            installer_name: "my_app-1.0.0+1-x64-setup.exe",
+            default_legal_copyright: "Copyright (C) 2025 Example",
+            nsis_install_dir: &toolchain,
+            icon_path: &icon_path,
+            build_output_dir: &build_dir,
+            installer_output_dir: &installer_output_dir,
+        };
+
+        let script = generator.generate(temp.path()).unwrap();
+
+        let output = Command::new(&makensis)
+            .args(["/INPUTCHARSET", "UTF8", "/V3"])
+            .arg(&script)
+            .output()
+            .expect("failed to run makensis");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "makensis failed with {}:\n{stdout}\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let installer = installer_output_dir.join("my_app-1.0.0+1-x64-setup.exe");
+        let size = fs::metadata(&installer)
+            .expect("the installer was not produced")
+            .len();
+        assert!(size > 0, "the installer is empty");
+        assert!(
+            stdout.contains("x86-unicode"),
+            "expected a Unicode installer:\n{stdout}"
+        );
     }
 }

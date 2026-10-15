@@ -48,8 +48,22 @@ pub fn extract_zip(data: &[u8], path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Create a ZIP archive whose entries sit at the archive root.
 pub fn create_zip_archive<P: AsRef<Path>, Q: AsRef<Path>>(
     source_dir: P,
+    zip_file_path: Q,
+) -> Result<()> {
+    create_zip_archive_under(source_dir, None, zip_file_path)
+}
+
+/// Create a ZIP archive of `source_dir`, optionally below a `root_folder`.
+///
+/// When `root_folder` is set every entry is prefixed with it, so extracting the
+/// archive produces a single directory instead of scattering the files into
+/// wherever the user unpacked it.
+pub fn create_zip_archive_under<P: AsRef<Path>, Q: AsRef<Path>>(
+    source_dir: P,
+    root_folder: Option<&str>,
     zip_file_path: Q,
 ) -> Result<()> {
     use walkdir::WalkDir;
@@ -61,6 +75,15 @@ pub fn create_zip_archive<P: AsRef<Path>, Q: AsRef<Path>>(
     let file = std::fs::File::create(zip_file_path)?;
     let mut zip = ZipWriter::new(file);
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::DEFLATE);
+
+    let prefix = root_folder
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| format!("{}/", name.trim_end_matches('/')));
+
+    if let Some(prefix) = prefix.as_deref() {
+        zip.add_directory(prefix, options)?;
+    }
 
     for entry in WalkDir::new(source_dir) {
         let entry = entry?;
@@ -78,14 +101,17 @@ pub fn create_zip_archive<P: AsRef<Path>, Q: AsRef<Path>>(
             .map(|c| c.as_os_str())
             .collect::<Vec<_>>()
             .join("/".as_ref());
+        let zip_path = match prefix.as_deref() {
+            Some(prefix) => format!("{prefix}{}", zip_path.to_string_lossy()),
+            None => zip_path.to_string_lossy().into_owned(),
+        };
 
         if path.is_file() {
-            zip.start_file(zip_path.to_string_lossy(), options)?;
+            zip.start_file(zip_path, options)?;
             let mut file = std::fs::File::open(path)?;
             std::io::copy(&mut file, &mut zip)?;
         } else if path.is_dir() {
-            let dir_path = format!("{}/", zip_path.to_string_lossy());
-            zip.add_directory(&dir_path, options)?;
+            zip.add_directory(format!("{zip_path}/"), options)?;
         }
         // Symlinks are skipped: WalkDir does not follow links by default.
     }
@@ -221,6 +247,53 @@ mod tests {
                 .any(|(name, contents)| name == "data/assets.json" && contents == "{}"),
             "expected nested asset with forward slashes, got {names:?}"
         );
+    }
+
+    #[test]
+    fn zip_archive_can_place_everything_below_a_root_folder() {
+        let temp = TempDir::new().unwrap();
+        let source = source_tree(
+            temp.path(),
+            "bundle",
+            &[("app.exe", "binary"), ("data/assets.json", "{}")],
+        );
+        let archive = temp.path().join("portable.zip");
+
+        create_zip_archive_under(&source, Some("my_app-1.0.0"), &archive).unwrap();
+
+        let data = fs::read(&archive).unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(data)).unwrap();
+        let names: Vec<String> = (0..zip.len())
+            .map(|index| zip.by_index(index).unwrap().name().to_string())
+            .collect();
+
+        assert!(
+            names.contains(&"my_app-1.0.0/app.exe".to_string()),
+            "{names:?}"
+        );
+        assert!(
+            names.contains(&"my_app-1.0.0/data/assets.json".to_string()),
+            "{names:?}"
+        );
+        // Nothing may escape the root folder.
+        assert!(
+            names.iter().all(|name| name.starts_with("my_app-1.0.0/")),
+            "{names:?}"
+        );
+    }
+
+    #[test]
+    fn an_empty_root_folder_keeps_the_archive_flat() {
+        let temp = TempDir::new().unwrap();
+        let source = source_tree(temp.path(), "bundle", &[("app.exe", "binary")]);
+        let archive = temp.path().join("portable.zip");
+
+        create_zip_archive_under(&source, Some("  "), &archive).unwrap();
+
+        let data = fs::read(&archive).unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(data)).unwrap();
+
+        assert_eq!(zip.by_index(0).unwrap().name(), "app.exe");
     }
 
     #[test]
