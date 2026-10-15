@@ -25,6 +25,7 @@ extern crate tracing;
 mod flutter;
 mod nsis;
 mod runner;
+mod signing;
 
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -44,7 +45,7 @@ use pacor_core::{
     platforms::{BuildArtifact, Platform},
     utils::{
         archive::create_zip_archive_under,
-        command::{CommandOutputMode, execute_command, find_command_path, macros::command_args},
+        command::CommandOutputMode,
         fs::{clean_dir, ensure_directory_exists},
     },
 };
@@ -166,18 +167,9 @@ impl<'a> BundleBuilder for WindowsBuilder<'a> {
             .into());
         }
 
-        // Validate signing config
+        // Validate signing config, including that a signing tool is reachable.
         if self.should_sign_binaries() {
-            pacor_core::packaging::require_existing_path(
-                "platforms.windows.certificate_file",
-                self.windows_config.certificate_path(),
-            )?;
-
-            let cert_password = self.windows_config.certificate_password();
-            pacor_core::packaging::require_config(
-                "platforms.windows.certificate_password",
-                &cert_password,
-            )?;
+            signing::Signer::resolve(self.windows_config)?;
         }
 
         Ok(())
@@ -215,12 +207,18 @@ impl<'a> BundleBuilder for WindowsBuilder<'a> {
         // Everything below packages this executable, so resolve it once and
         // fail early with a useful message when it is not there.
         let executable = self.main_executable_path()?;
-        debug!(executable = %executable.display(), "Application executable located");
+
+        // NSIS embeds the file contents, so the application has to be signed
+        // before the installer is compiled; the portable archive is packed from
+        // the same signed file.
+        if let Some(signer) = self.signer()? {
+            signer.sign(&executable, &command_output_mode)?;
+        }
 
         let installer_artifact = self.build_installer(&command_output_mode)?;
         let mut artifacts = vec![installer_artifact];
         if self.windows_config.is_portable_build_enabled() {
-            let portable_artifact = self.build_portable_archive(&command_output_mode)?;
+            let portable_artifact = self.build_portable_archive()?;
             artifacts.push(portable_artifact);
         }
 
@@ -343,7 +341,7 @@ impl WindowsBuilder<'_> {
             &icon_path,
             &default_legal_copyright,
         );
-        let artifact = builder.build(
+        let mut artifact = builder.build(
             self.flutter_project.name(),
             self.flutter_project.version(),
             &self.target_arch,
@@ -352,9 +350,13 @@ impl WindowsBuilder<'_> {
             command_output_mode,
         )?;
 
-        // Sign the installer if signing is configured
-        if self.should_sign_binaries() {
-            self.sign_binary(artifact.file(), command_output_mode)?;
+        // Sign the installer itself as well: the installed files are only as
+        // trustworthy as the executable that wrote them. Signing rewrites the
+        // file, so the checksum written next to it has to be regenerated.
+        if let Some(signer) = self.signer()? {
+            signer.sign(artifact.file(), command_output_mode)?;
+            artifact =
+                pacor_core::packaging::create_artifact_with_checksum(artifact.file().clone())?;
         }
 
         Ok(artifact)
@@ -364,19 +366,8 @@ impl WindowsBuilder<'_> {
     ///
     /// The archive holds a single top-level directory, so extracting it cannot
     /// scatter the application into an unrelated folder.
-    fn build_portable_archive(
-        &self,
-        command_output_mode: &CommandOutputMode,
-    ) -> Result<BuildArtifact> {
+    fn build_portable_archive(&self) -> Result<BuildArtifact> {
         info!("Creating portable ZIP archive...");
-
-        // TODO: check if main exe already signed
-        // Sign the main exe if signing is configured
-        if self.should_sign_binaries() {
-            let exe_name = self.find_main_executable_name()?;
-            let exe_path = self.flutter_build_path().join(exe_name);
-            self.sign_binary(&exe_path, command_output_mode)?;
-        }
 
         let artifact_name = pacor_core::packaging::artifact_name(
             self.flutter_project.name(),
@@ -423,63 +414,13 @@ impl WindowsBuilder<'_> {
             || self.windows_config.certificate_path().is_some()
     }
 
-    /// Signs a Windows binary (EXE, MSI, etc.) using signtool or a custom signing tool.
-    fn sign_binary(
-        &self,
-        binary_path: &Path,
-        command_output_mode: &CommandOutputMode,
-    ) -> Result<()> {
-        let sign_tool = if let Some(tool) = self.windows_config.signing_tool_path() {
-            PathBuf::from(tool)
-        } else {
-            // Default to signtool.exe (assumes it's in PATH or Windows SDK installed)
-            match find_command_path("signtool")? {
-                Some(path) => path,
-                None => {
-                    warn!(
-                        "sign_tool not configured and signtool not found in PATH; skipping signing"
-                    );
-                    return Ok(()); // Not an error if signing is optional
-                }
-            }
-        };
+    /// Resolved signer, or `None` when code signing is not configured.
+    fn signer(&self) -> Result<Option<signing::Signer<'_>>> {
+        if !self.should_sign_binaries() {
+            debug!("Code signing disabled: no certificate or tool configured");
+            return Ok(None);
+        }
 
-        let cert_file = self
-            .windows_config
-            .certificate_path()
-            .clone()
-            .ok_or_else(|| {
-                anyhow!("`platforms.windows.certificate_path` must be set to sign binaries")
-            })?;
-        let password = self.windows_config.certificate_password().ok_or_else(|| {
-            anyhow!(
-                "set `PACOR_WINDOWS_CERT_PASSWORD` (or `platforms.windows.certificate_password`) to sign binaries"
-            )
-        })?;
-
-        // Basic signtool command:
-        // signtool sign /fd SHA256 /f "cert.pfx" /p "password" "app.exe"
-        let args = command_args![
-            "sign",
-            "/fd",
-            "SHA256",
-            "/f",
-            &cert_file,
-            "/p",
-            password,
-            binary_path,
-        ];
-
-        debug!(binary = %binary_path.display(), "Signing binary...");
-        execute_command(
-            sign_tool,
-            &args,
-            None,
-            None::<&[(&str, &str)]>,
-            command_output_mode,
-        )?;
-
-        info!(binary = %binary_path.display(), "Binary signed successfully");
-        Ok(())
+        Ok(Some(signing::Signer::resolve(self.windows_config)?))
     }
 }

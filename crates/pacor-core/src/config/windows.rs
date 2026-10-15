@@ -76,6 +76,13 @@ pub struct WindowsConfig {
     #[serde(default, skip_serializing)]
     pub certificate_password: Option<String>,
 
+    /// RFC 3161 timestamp server used while signing.
+    ///
+    /// Without a timestamp an Authenticode signature stops being valid when the
+    /// certificate expires; set this to an empty string to sign without one.
+    #[serde(default = "default_timestamp_url")]
+    pub timestamp_url: Option<String>,
+
     /// MSI upgrade code (GUID). Only relevant when `installer_format = "msi"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub msi_upgrade_code: Option<String>,
@@ -83,6 +90,10 @@ pub struct WindowsConfig {
 
 fn default_portable_build() -> bool {
     true
+}
+
+fn default_timestamp_url() -> Option<String> {
+    Some("http://timestamp.digicert.com".to_string())
 }
 
 impl WindowsConfig {
@@ -112,6 +123,17 @@ impl WindowsConfig {
     pub fn is_portable_build_enabled(&self) -> bool {
         self.build_portable
     }
+
+    /// Timestamp server for Authenticode signing, or `None` when disabled.
+    ///
+    /// An empty value turns timestamping off, which is occasionally needed in
+    /// networks without access to a timestamp authority.
+    pub fn timestamp_url(&self) -> Option<&str> {
+        self.timestamp_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+    }
 }
 
 impl Default for WindowsConfig {
@@ -122,8 +144,39 @@ impl Default for WindowsConfig {
             signing_tool_path: None,
             certificate_path: None,
             certificate_password: None,
+            timestamp_url: default_timestamp_url(),
             msi_upgrade_code: None,
             build_portable: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timestamping_defaults_to_a_public_authority() {
+        let config = WindowsConfig::default();
+
+        assert_eq!(
+            config.timestamp_url(),
+            Some("http://timestamp.digicert.com")
+        );
+    }
+
+    #[test]
+    fn an_empty_timestamp_url_disables_timestamping() {
+        let config: WindowsConfig = toml::from_str("timestamp_url = \"\"").unwrap();
+
+        assert_eq!(config.timestamp_url(), None);
+    }
+
+    #[test]
+    fn an_absent_timestamp_url_keeps_the_default() {
+        let config: WindowsConfig = toml::from_str("build_portable = false").unwrap();
+
+        assert!(config.timestamp_url().is_some());
+        assert!(!config.is_portable_build_enabled());
     }
 }

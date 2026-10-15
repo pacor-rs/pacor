@@ -91,6 +91,9 @@ build_portable = true
 # certificate_path = "cert.pfx"
 # Prefer the PACOR_WINDOWS_CERT_PASSWORD environment variable over a literal.
 # certificate_password = "..."
+# RFC 3161 timestamp server. Without one, signatures stop being valid when the
+# certificate expires; set it to "" to sign without a timestamp.
+# timestamp_url = "http://timestamp.digicert.com"
 
 # ---------------------------------------------------------------------------
 # macOS: DMG installer (+ tar.gz updater archive)
