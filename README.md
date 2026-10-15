@@ -105,6 +105,8 @@ formats = ["appimage", "deb"]
 [platforms.windows]
 installer_format = "nsis"
 build_portable = true
+# certificate_path = "cert.pfx"        # + PACOR_WINDOWS_CERT_PASSWORD to sign
+# timestamp_url = "http://timestamp.digicert.com"
 
 [platforms.macos]
 minimum_system_version = "10.14"
@@ -113,12 +115,46 @@ minimum_system_version = "10.14"
 target_abi = ["arm64-v8a"]
 ```
 
+`flutter_build_mode` selects the Flutter build mode for the Windows, macOS and
+Linux backends and the directory their bundles are read from (for example
+`build/windows/x64/runner/Debug`); Android always builds a release APK.
+
 Secrets are read from the environment first and are never written back:
 `PACOR_WINDOWS_CERT_PASSWORD`, `PACOR_ANDROID_KEYSTORE_PASSWORD`,
 `PACOR_ANDROID_KEY_PASSWORD`. See
 [docs/ENVIRONMENT_VARIABLES.md](docs/ENVIRONMENT_VARIABLES.md) for the GitHub
 mirror variables. `PACOR_OUTPUT_DIR` and `PACOR_BUILD_MODE` override the
 corresponding `[build]` keys.
+
+## Windows packages
+
+`pacor build --target windows` writes an NSIS installer and, unless
+`build_portable = false`, a portable ZIP into the output directory, each with a
+`.sha1` file next to it:
+
+```
+dist/MyApp-1.0.0+1-x64-setup.exe
+dist/MyApp-1.0.0+1-x64-portable.zip
+```
+
+The installer is per-user (`%LOCALAPPDATA%`) and needs no administrator rights;
+it offers desktop and Start Menu shortcuts, refuses to install or uninstall while
+the application is running, and is localized from `[app.i18n]`. The portable
+archive contains everything below a single `<name>-<version>-<arch>/` directory,
+so extracting it cannot scatter the application.
+
+Code signing is driven by `platforms.windows` and signs the application
+executable *before* the installer is compiled, because NSIS embeds the file
+contents — signing afterwards would leave the installed copy unsigned. The
+installer is signed as well, and `timestamp_url` keeps both signatures valid past
+the certificate's expiry. `signtool.exe` is looked up in the configured path,
+then `PATH`, then the installed Windows SDKs.
+
+`makensis` from `PATH` is used when its plugin directory is writable; otherwise
+pacor downloads a pinned NSIS build into
+`%APPDATA%\pacor\windows\nsis\<template tag>` alongside the templates it renders.
+[`docs/WINDOWS.md`](docs/WINDOWS.md) documents the artifacts, the signing
+options, the cache layout and the failures that layout explains.
 
 ## Project layout
 
@@ -130,13 +166,18 @@ crates/
 ├── pacor-packaging/            # target registry (`packager_for`)
 ├── pacor-packaging-linux/      # AppImage, DEB, icons, desktop entry
 ├── pacor-packaging-macos/      # DMG, plist, localization, signing, notarization
-├── pacor-packaging-windows/    # NSIS, portable ZIP, signing
+├── pacor-packaging-windows/    # NSIS, portable ZIP, signtool signing
 ├── pacor-packaging-android/    # APK assembly, ABIs, signing
 └── pacor-cli/                  # clap arguments, dispatch, output, binary `pacor`
 ```
 
 Dependencies flow in one direction: `pacor-core` ← `pacor-packaging-*` ←
 `pacor-packaging` ← `pacor-cli`.
+
+Inside the Windows backend: `nsis/` owns the installer (toolchain resolution,
+template provisioning, script rendering), `signing.rs` the Authenticode step,
+`flutter.rs` the `flutter build` invocation and `runner.rs` everything that is
+read back out of the generated runner project.
 
 ### Build templates
 
@@ -166,6 +207,10 @@ baking the placeholder into the generated source, so a mismatch is loud.
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+
+# Opt-in end-to-end check: compiles the rendered NSIS script with a real
+# `makensis` (needs a prepared toolchain directory, see docs/WINDOWS.md)
+cargo test -p pacor-packaging-windows -- --ignored
 ```
 
 Because every backend is compiled on every host, the checks above on Linux
