@@ -10,11 +10,35 @@ pub enum FlutterBuildMode {
 }
 
 impl FlutterBuildMode {
+    /// Value passed to `flutter build <target> --<mode>`.
     pub fn as_str(&self) -> &'static str {
         match self {
             FlutterBuildMode::Release => "release",
             FlutterBuildMode::Debug => "debug",
             FlutterBuildMode::Profile => "profile",
+        }
+    }
+
+    /// Directory Flutter uses for this mode in a desktop build output.
+    ///
+    /// The names are capitalised by Flutter itself (`Release`, `Debug`,
+    /// `Profile`), so they cannot be derived from [`Self::as_str`].
+    pub fn dir_name(&self) -> &'static str {
+        match self {
+            FlutterBuildMode::Release => "Release",
+            FlutterBuildMode::Debug => "Debug",
+            FlutterBuildMode::Profile => "Profile",
+        }
+    }
+
+    /// Whether `flutter build` accepts `--obfuscate --split-debug-info` here.
+    ///
+    /// Obfuscation needs an AOT build, so Flutter rejects the flags in debug
+    /// mode.
+    pub fn supports_obfuscation(&self) -> bool {
+        match self {
+            FlutterBuildMode::Release | FlutterBuildMode::Profile => true,
+            FlutterBuildMode::Debug => false,
         }
     }
 }
@@ -88,6 +112,20 @@ mod tests {
         assert!(toml_str.contains("debug"));
         let opts: BuildOptions = toml::from_str(&toml_str).unwrap();
         assert_eq!(opts.flutter_build_mode, FlutterBuildMode::Debug);
+    }
+
+    #[test]
+    fn test_build_mode_dir_name() {
+        assert_eq!(FlutterBuildMode::Release.dir_name(), "Release");
+        assert_eq!(FlutterBuildMode::Debug.dir_name(), "Debug");
+        assert_eq!(FlutterBuildMode::Profile.dir_name(), "Profile");
+    }
+
+    #[test]
+    fn obfuscation_is_rejected_by_debug_builds() {
+        assert!(FlutterBuildMode::Release.supports_obfuscation());
+        assert!(FlutterBuildMode::Profile.supports_obfuscation());
+        assert!(!FlutterBuildMode::Debug.supports_obfuscation());
     }
 
     #[test]

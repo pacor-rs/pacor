@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
-use pacor_core::config::{AppConfig, LinuxConfig, LinuxPackageFormat};
+use pacor_core::config::{AppConfig, FlutterBuildMode, LinuxConfig, LinuxPackageFormat};
 use pacor_core::core::arch::Arch;
 use pacor_core::core::project::FlutterProject;
 use pacor_core::platforms::BuildArtifact;
@@ -30,6 +30,7 @@ pub(crate) struct LinuxBuildContext<'a> {
     pub output_dir: &'a Path,
     pub tools_dir: &'a Path,
     pub arch: &'a Arch,
+    pub build_mode: FlutterBuildMode,
 }
 
 /// Build every configured package format.
@@ -209,7 +210,11 @@ fn build_flutter_with_templates(
     swap: crate::project_templates::TemplateSwap,
     command_output_mode: &CommandOutputMode,
 ) -> Result<()> {
-    flutter::build(context.project_root, command_output_mode)?;
+    flutter::build(
+        context.project_root,
+        context.build_mode,
+        command_output_mode,
+    )?;
     swap.restore()
 }
 

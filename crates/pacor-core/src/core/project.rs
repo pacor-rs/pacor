@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    config::FlutterBuildMode,
     core::arch::Arch,
     error::{ConfigurationError, ProjectError, ValidationError},
     platforms::Platform,
@@ -43,25 +44,52 @@ impl FlutterProject {
         Ok(pubspec)
     }
 
-    /// Get Flutter build path for a given platform
+    /// Get the Flutter build path for a release build.
+    ///
+    /// Shorthand for [`Self::get_flutter_build_path_for_mode`] with
+    /// [`FlutterBuildMode::Release`], for backends that only ever build release.
     pub fn get_flutter_build_path(
         &self,
         project_root: &Path,
         platform: Platform,
         arch: &Arch,
     ) -> PathBuf {
+        self.get_flutter_build_path_for_mode(
+            project_root,
+            platform,
+            arch,
+            FlutterBuildMode::Release,
+        )
+    }
+
+    /// Get Flutter build path for a given platform, architecture and build mode.
+    ///
+    /// Flutter writes desktop bundles into a mode-named directory (`Release`,
+    /// `Debug`, `Profile`); Android APKs land in a single directory because the
+    /// mode is part of the file name instead.
+    pub fn get_flutter_build_path_for_mode(
+        &self,
+        project_root: &Path,
+        platform: Platform,
+        arch: &Arch,
+        mode: FlutterBuildMode,
+    ) -> PathBuf {
         match platform {
             Platform::Android => project_root.join("build/app/outputs/flutter-apk"),
-            Platform::Linux => {
-                project_root.join(format!("build/linux/{}/release/bundle", arch.as_str()))
+            Platform::Linux => project_root.join(format!(
+                "build/linux/{}/{}/bundle",
+                arch.as_str(),
+                mode.as_str()
+            )),
+            Platform::MacOS => {
+                project_root.join(format!("build/macos/Build/Products/{}", mode.dir_name()))
             }
-            Platform::MacOS => project_root.join("build/macos/Build/Products/Release"),
             Platform::Windows => project_root
                 .join("build")
                 .join("windows")
                 .join(arch.as_str())
                 .join("runner")
-                .join("Release"),
+                .join(mode.dir_name()),
         }
     }
 
@@ -116,4 +144,76 @@ fn is_flutter_installed() -> bool {
         &CommandOutputMode::default(),
     )
     .is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn project() -> FlutterProject {
+        serde_yaml::from_str("name: my_app\nversion: 1.0.0+1\n").unwrap()
+    }
+
+    #[test]
+    fn windows_bundles_live_in_a_mode_named_directory() {
+        let root = Path::new("/project");
+
+        assert_eq!(
+            project().get_flutter_build_path(root, Platform::Windows, &Arch::X64),
+            Path::new("/project/build/windows/x64/runner/Release")
+        );
+        assert_eq!(
+            project().get_flutter_build_path_for_mode(
+                root,
+                Platform::Windows,
+                &Arch::ARM64,
+                FlutterBuildMode::Debug
+            ),
+            Path::new("/project/build/windows/arm64/runner/Debug")
+        );
+    }
+
+    #[test]
+    fn release_paths_are_unchanged_for_the_other_desktop_targets() {
+        let root = Path::new("/project");
+
+        assert_eq!(
+            project().get_flutter_build_path(root, Platform::Linux, &Arch::X64),
+            Path::new("/project/build/linux/x64/release/bundle")
+        );
+        assert_eq!(
+            project().get_flutter_build_path(root, Platform::MacOS, &Arch::ARM64),
+            Path::new("/project/build/macos/Build/Products/Release")
+        );
+        assert_eq!(
+            project().get_flutter_build_path_for_mode(
+                root,
+                Platform::MacOS,
+                &Arch::ARM64,
+                FlutterBuildMode::Profile
+            ),
+            Path::new("/project/build/macos/Build/Products/Profile")
+        );
+    }
+
+    #[test]
+    fn android_ignores_the_build_mode() {
+        let root = Path::new("/project");
+
+        for mode in [
+            FlutterBuildMode::Release,
+            FlutterBuildMode::Debug,
+            FlutterBuildMode::Profile,
+        ] {
+            assert_eq!(
+                project().get_flutter_build_path_for_mode(
+                    root,
+                    Platform::Android,
+                    &Arch::ARM64,
+                    mode
+                ),
+                Path::new("/project/build/app/outputs/flutter-apk")
+            );
+        }
+    }
 }

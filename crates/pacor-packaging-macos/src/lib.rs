@@ -41,7 +41,7 @@ use pacor_core::core::{
     project::{FlutterProject, find_flutter_project_root},
 };
 use pacor_core::{
-    config::{AppConfig, MacOSBuildConfig, PacorConfig},
+    config::{AppConfig, FlutterBuildMode, MacOSBuildConfig, PacorConfig},
     platforms::{BuildArtifact, Platform},
     utils::{command::CommandOutputMode, fs::clean_dir},
 };
@@ -62,6 +62,7 @@ pub struct MacOSAppBuilder<'a> {
     create_dmg_script_path: PathBuf,
 
     arch: Arch,
+    build_mode: FlutterBuildMode,
 }
 
 impl<'a> BundleBuilder for MacOSAppBuilder<'a> {
@@ -84,8 +85,13 @@ impl<'a> BundleBuilder for MacOSAppBuilder<'a> {
         let project_root = find_flutter_project_root()?;
         let flutter_project = FlutterProject::load_from_pubspec(&project_root)?;
         let arch = Arch::current()?;
-        let flutter_build_dir =
-            flutter_project.get_flutter_build_path(&project_root, Platform::MacOS, &arch);
+        let build_mode = config.build.flutter_build_mode;
+        let flutter_build_dir = flutter_project.get_flutter_build_path_for_mode(
+            &project_root,
+            Platform::MacOS,
+            &arch,
+            build_mode,
+        );
         let output_dir = config.output_dir()?;
 
         let tools_dir = pacor_core::tools::platform_cache_dir(Platform::MacOS)
@@ -96,6 +102,7 @@ impl<'a> BundleBuilder for MacOSAppBuilder<'a> {
             project_name = flutter_project.name(),
             project_version = flutter_project.version(),
             target_arch = %arch,
+            build_mode = %build_mode,
             output_directory = %output_dir.display(),
             "Initializing macOS application builder"
         );
@@ -110,6 +117,7 @@ impl<'a> BundleBuilder for MacOSAppBuilder<'a> {
             tools_dir,
             create_dmg_script_path,
             arch,
+            build_mode,
         })
     }
 
@@ -129,7 +137,11 @@ impl<'a> BundleBuilder for MacOSAppBuilder<'a> {
 
         if !skip_flutter_build {
             tools::prepare_packaging_tools(&self.tools_dir, &self.create_dmg_script_path)?;
-            flutter_build::build_flutter_app(&self.project_root, &command_output_mode)?;
+            flutter_build::build_flutter_app(
+                &self.project_root,
+                self.build_mode,
+                &command_output_mode,
+            )?;
             localization::add_localization_resources(&app_bundle_path, self.app_config)?;
         } else {
             info!("Skipping Flutter build as requested");

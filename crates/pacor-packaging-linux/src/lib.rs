@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use pacor_core::{
-    config::{LinuxConfig, PacorConfig},
+    config::{FlutterBuildMode, LinuxConfig, PacorConfig},
     core::{
         arch::Arch,
         builder::BundleBuilder,
@@ -50,6 +50,7 @@ pub struct LinuxBuilder<'a> {
     output_dir: PathBuf,
     tools_dir: PathBuf,
     arch: Arch,
+    build_mode: FlutterBuildMode,
 }
 
 impl<'a> BundleBuilder for LinuxBuilder<'a> {
@@ -65,8 +66,13 @@ impl<'a> BundleBuilder for LinuxBuilder<'a> {
         let project_root = find_flutter_project_root()?;
         let flutter_project = FlutterProject::load_from_pubspec(&project_root)?;
         let arch = Arch::current()?;
-        let flutter_build_path =
-            flutter_project.get_flutter_build_path(&project_root, Platform::Linux, &arch);
+        let build_mode = config.build.flutter_build_mode;
+        let flutter_build_path = flutter_project.get_flutter_build_path_for_mode(
+            &project_root,
+            Platform::Linux,
+            &arch,
+            build_mode,
+        );
         let output_dir = config.output_dir()?;
 
         let tools_dir = pacor_core::tools::platform_cache_dir(Platform::Linux)
@@ -76,6 +82,7 @@ impl<'a> BundleBuilder for LinuxBuilder<'a> {
             project = %flutter_project.name(),
             version = %flutter_project.version(),
             arch = %arch,
+            mode = %build_mode,
             output_dir = %output_dir.display(),
             tools_dir = %tools_dir.display(),
             "Initializing Linux builder"
@@ -90,6 +97,7 @@ impl<'a> BundleBuilder for LinuxBuilder<'a> {
             output_dir,
             tools_dir,
             arch,
+            build_mode,
         })
     }
 
@@ -166,6 +174,7 @@ impl LinuxBuilder<'_> {
             output_dir: &self.output_dir,
             tools_dir: &self.tools_dir,
             arch: &self.arch,
+            build_mode: self.build_mode,
         }
     }
 }
