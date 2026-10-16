@@ -265,10 +265,23 @@ pacor 固定的下载地址位于 `github.com` 与 `raw.githubusercontent.com`�
   `PACOR_GITHUB_MIRROR_BASE_URL`；
 - WiX 工具链同样是 release 资源（`wixtoolset/wix3` 的 `wix3141rtm`），也走上面两个镜像变量。
 
+一个变量覆盖全部下载的写法：
+
+```powershell
+$env:PACOR_GITHUB_MIRROR_BASE_URL = "https://gh.my-website.ccwu.cc"
+```
+
+两点实测经验（详见 [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md#镜像选型要注意的两件事实测)）：
+
+- 模板文件只有几 KB，任何能连通的镜像都够用；NSIS 发行版约 2 MB，冷启动整条链路实测 1 分钟内完成；
+- **WiX 工具链约 39 MB，是对镜像的考验**：镜像带宽不足或中途断流时下载会失败，而 pacor 的下载
+  没有重试/续传，只能重来。这类网络下更省事的是离线预置（见下）。
+
 也可以离线预置：把 NSIS 发行版与模板按上面的布局放进
 `%APPDATA%\pacor\windows\nsis\<模板 tag>\`，并创建一个空的 `.extracted` 标记文件；
 已存在的模板文件本来就会被跳过，NSIS 则因该标记而不再下载。MSI 的
-`%APPDATA%\pacor\windows\wix\<模板 tag>\` 同理。
+`%APPDATA%\pacor\windows\wix\<模板 tag>\` 同理（放好解压后的 WiX 工具链、`main.wxs`、
+`culture.wxl.tmpl` 与 `.extracted`）。
 
 ### `error LGHT0311 ... database code page '936'`（MSI）
 

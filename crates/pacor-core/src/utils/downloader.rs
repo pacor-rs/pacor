@@ -442,6 +442,38 @@ mod tests {
         );
     }
 
+    /// The pinned-tag template URLs are the ones pacor builds itself, and a
+    /// mirror has to reproduce their path exactly — including `refs/tags/<tag>`
+    /// and the trailing slash of a base URL that came with one.
+    #[test]
+    fn test_build_mirror_url_from_base_keeps_pinned_tag_paths() {
+        temp_env::with_var(
+            ENV_GITHUB_MIRROR_BASE_URL,
+            Some("https://mirror.example.com/"),
+            || {
+                let url = pacor_core_template_url_for_test();
+                let mirror = build_mirror_url_from_base(&url).unwrap();
+
+                assert_eq!(
+                    mirror,
+                    format!(
+                        "https://mirror.example.com/raw.githubusercontent.com/pacor-rs/tools/refs/tags/\
+                         {}/windows/wix/main.wxs",
+                        crate::tools::TEMPLATE_REF
+                    )
+                );
+                // The scheme is dropped, so the mirror host is the only host in
+                // the result: a stray `https://` in the middle would make the
+                // request go somewhere else entirely.
+                assert_eq!(mirror.matches("://").count(), 1, "{mirror}");
+            },
+        );
+    }
+
+    fn pacor_core_template_url_for_test() -> String {
+        crate::tools::template_url("windows/wix/main.wxs")
+    }
+
     #[test]
     fn test_build_mirror_url_from_base_no_env() {
         temp_env::with_var_unset(ENV_GITHUB_MIRROR_BASE_URL, || {

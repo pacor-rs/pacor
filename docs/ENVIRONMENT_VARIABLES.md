@@ -88,15 +88,15 @@ https://cdn.jsdelivr.net/gh/flutter/flutter@main/README.md
 **示例**:
 
 ```bash
-# 使用 GitHub 代理镜像
-export PACOR_GITHUB_MIRROR_BASE_URL="https://ghproxy.com"
+# 使用 GitHub 代理镜像（一个变量同时覆盖 raw 文件与 release 资源）
+export PACOR_GITHUB_MIRROR_BASE_URL="https://gh.my-website.ccwu.cc"
 
 # 使用其他镜像服务
-export PACOR_GITHUB_MIRROR_BASE_URL="https://mirror.github.com"
+export PACOR_GITHUB_MIRROR_BASE_URL="https://your-mirror.example.com"
 ```
 
 **工作原理**:
-当设置此变量时，原始的 GitHub 下载链接会作为路径拼接到镜像基础 URL 后面。
+当设置此变量时，原始 GitHub 链接去掉协议后作为路径拼接到镜像基础 URL 后面。
 
 原始链接：
 
@@ -107,8 +107,18 @@ https://github.com/flutter/flutter/releases/download/3.0.0/flutter_linux_3.0.0-s
 转换后：
 
 ```
-https://ghproxy.com/https://github.com/flutter/flutter/releases/download/3.0.0/flutter_linux_3.0.0-stable.tar.xz
+https://gh.my-website.ccwu.cc/github.com/flutter/flutter/releases/download/3.0.0/flutter_linux_3.0.0-stable.tar.xz
 ```
+
+raw 链接同理：`https://raw.githubusercontent.com/pacor-rs/tools/refs/tags/1.1/windows/wix/main.wxs`
+会变成 `https://gh.my-website.ccwu.cc/raw.githubusercontent.com/pacor-rs/tools/refs/tags/1.1/windows/wix/main.wxs`
+（这条映射由 `utils::downloader` 的单元测试固定下来）。ghproxy 这类代理对
+`https://<镜像>/<主机>/<路径>` 与 `https://<镜像>/https://<主机>/<路径>` 两种写法都接受，
+因此 base URL 模式可以直接使用。
+
+**注意**: 配置了镜像时，pacor 会**显式不使用** `HTTP_PROXY`/`HTTPS_PROXY`（这是为了避免代理与
+镜像叠加）。如果镜像本身只有通过代理才能访问，请改用 `PACOR_GITHUB_RAW_MIRROR_TEMPLATE` /
+`PACOR_GITHUB_RELEASE_MIRROR_TEMPLATE` 指向可达的地址。
 
 ## 环境变量优先级
 
@@ -125,15 +135,34 @@ https://ghproxy.com/https://github.com/flutter/flutter/releases/download/3.0.0/f
 对于中国大陆的用户，推荐使用以下配置：
 
 ```bash
-# 方案 1: 使用 jsDelivr (releases 文件)
-export PACOR_GITHUB_RELEASE_MIRROR_TEMPLATE="https://cdn.jsdelivr.net/gh/<owner>/<repo>@<version>/<asset>"
+# 方案 1: 使用代理镜像（一个变量同时覆盖 raw 文件与 release 资源，推荐）
+export PACOR_GITHUB_MIRROR_BASE_URL="https://gh.my-website.ccwu.cc"
 
-# 方案 1: 使用 jsDelivr (raw 文件)
+# 方案 2: 用模板分别指定
+#   raw 文件（模板 tag 的路径是 refs/tags/<branch>/）
+export PACOR_GITHUB_RAW_MIRROR_TEMPLATE="https://gh.my-website.ccwu.cc/https://raw.githubusercontent.com/<owner>/<repo>/refs/tags/<branch>/<path>"
+#   release 资源
+export PACOR_GITHUB_RELEASE_MIRROR_TEMPLATE="https://gh.my-website.ccwu.cc/https://github.com/<owner>/<repo>/releases/download/<version>/<asset>"
+
+# 方案 3: jsDelivr 只能代理仓库内的文件，不能代理 release 资源
 export PACOR_GITHUB_RAW_MIRROR_TEMPLATE="https://cdn.jsdelivr.net/gh/<owner>/<repo>@<branch>/<path>"
-
-# 方案 2: 使用 ghproxy
-export PACOR_GITHUB_MIRROR_BASE_URL="https://ghproxy.com"
 ```
+
+### 镜像选型要注意的两件事（实测）
+
+在 Windows 上清空 `%APPDATA%\pacor\windows` 缓存后实测（2026-10）：
+
+- **模板文件很小，镜像都能胜任**：`windows/nsis/**` 的 5 个文件与 `windows/wix/**` 的 2 个文件
+  经镜像下载后大小与 tag 中的 blob 完全一致；NSIS 冷启动（下载发行版 + 模板 + 编译 + 打包）
+  60 秒内完成。
+- **大文件（WiX 工具链约 39 MB）是对镜像的考验**：实测 `ghproxy.net` 在约 75 KB/s 的速度下
+  传输该 zip 时会被断开（`Peer disconnected`），pacor 的下载没有重试/续传，因此整个下载要重来；
+  换用 `https://gh.my-website.ccwu.cc` 时本机在 TLS 握手阶段即被重置（连 80 端口同样重置，
+  而同一 TLS 栈访问 `cloudflare.com`、`api.github.com` 正常，属于域名级链路拦截），
+  无法验证其吞吐。
+
+因此：**选一个能稳定交付 39 MB 的镜像**；如果镜像的带宽有限或会断流，首次 MSI 构建会反复失败，
+此时按 [WINDOWS.md](WINDOWS.md) 的方式离线预置 WiX 工具链更省事（NSIS 的 2 MB 发行版不受影响）。
 
 ### 2. 企业环境
 
