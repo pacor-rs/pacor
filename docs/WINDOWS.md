@@ -255,6 +255,24 @@ culture.wxl.tmpl               # 本地化模板，每个语言渲染一份
 `signtool.exe`。pacor 会在 SDK 的 `…\Windows Kits\<10|8.1>\bin\<版本>\x64\` 中查找，
 因此通常不必手动配置。
 
+### 浏览器能打开 GitHub，但 pacor 下载失败
+
+pacor 的下载客户端只读 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 环境变量，**不读 Windows 的
+PAC 自动配置脚本或系统代理设置**，而浏览器读的是后者。所以「浏览器能访问」并不说明 pacor 能访问。
+
+先从「Internet 选项 → 连接 → 局域网设置」看到 PAC 地址，再从 PAC 里找到实际代理，然后在运行
+pacor 的终端里导出：
+
+```powershell
+$env:HTTPS_PROXY = "http://127.0.0.1:1086"
+$env:HTTP_PROXY  = "http://127.0.0.1:1086"
+```
+
+注意：**配置了镜像时 pacor 不使用代理**，两者不能叠加。代理能直连 GitHub 时，用代理、不设镜像
+是最优组合——实测冷缓存下模板 2 s、39 MB 的 WiX 工具链 26 s 下载完成，随后 MSI 与 NSIS 构建都
+在 1 分钟内结束。详见
+[ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md#http_proxy--https_proxy标准代理变量)。
+
 ### 下载 NSIS 或模板失败（网络受限）
 
 pacor 固定的下载地址位于 `github.com` 与 `raw.githubusercontent.com`，在受限网络中可能

@@ -128,6 +128,33 @@ raw 链接同理：`https://raw.githubusercontent.com/pacor-rs/tools/refs/tags/1
 2. `PACOR_GITHUB_MIRROR_BASE_URL`
 3. 原始 GitHub URL (默认)
 
+## HTTP_PROXY / HTTPS_PROXY（标准代理变量）
+
+**用途**: 通过本机或局域网代理访问 GitHub。pacor 的下载客户端读取这些标准变量
+（`ALL_PROXY` 亦可），不需要额外配置项。
+
+**重要: 浏览器能访问 GitHub 并不代表 pacor 能访问。** 浏览器会使用 Windows 的
+「Internet 选项」里的**自动配置脚本（PAC）**，而 pacor（与 `curl` 一样）**只读环境变量**，
+既不看 PAC，也不看注册表里的系统代理设置。如果这台机器靠 PAC 上网，必须在运行 pacor 的终端里
+显式导出代理地址：
+
+```powershell
+# 例：本机代理监听 1086（hysteria 的 http/socks5 混合端口）
+$env:HTTPS_PROXY = "http://127.0.0.1:1086"
+$env:HTTP_PROXY  = "http://127.0.0.1:1086"
+```
+
+从 Windows 的 Internet 设置里可以看到 PAC 地址，PAC 里会写实际代理；本机实测该代理同时接受
+HTTP CONNECT 与 SOCKS5，pacor 用 HTTP 形式即可。
+
+**与镜像的关系**: 配置了镜像时 pacor **不会**使用代理，两者不能叠加。如果代理本身能直连
+GitHub，建议只用代理、不设镜像；实测对比：
+
+| 方式 | 结果 |
+| --- | --- |
+| 代理（`HTTPS_PROXY=http://127.0.0.1:1086`） | 冷缓存下模板 2 s、WiX 工具链（39 MB）26 s，两个 MSI 与排除 NSIS 全流程 48 s 完成 |
+| 镜像 `ghproxy.net` | 模板正常，39 MB 工具链传输中断（`Peer disconnected`），构建失败 |
+
 ## 使用场景
 
 ### 1. 中国大陆用户
@@ -157,9 +184,8 @@ export PACOR_GITHUB_RAW_MIRROR_TEMPLATE="https://cdn.jsdelivr.net/gh/<owner>/<re
   60 秒内完成。
 - **大文件（WiX 工具链约 39 MB）是对镜像的考验**：实测 `ghproxy.net` 在约 75 KB/s 的速度下
   传输该 zip 时会被断开（`Peer disconnected`），pacor 的下载没有重试/续传，因此整个下载要重来；
-  换用 `https://gh.my-website.ccwu.cc` 时本机在 TLS 握手阶段即被重置（连 80 端口同样重置，
-  而同一 TLS 栈访问 `cloudflare.com`、`api.github.com` 正常，属于域名级链路拦截），
-  无法验证其吞吐。
+  `https://gh.my-website.ccwu.cc` 在本机需要经代理才能访问（直接访问时 TLS 握手即被重置），
+  经代理后一切正常，但此时**直接用代理而不设镜像**更简单也更快（见上一节）。
 
 因此：**选一个能稳定交付 39 MB 的镜像**；如果镜像的带宽有限或会断流，首次 MSI 构建会反复失败，
 此时按 [WINDOWS.md](WINDOWS.md) 的方式离线预置 WiX 工具链更省事（NSIS 的 2 MB 发行版不受影响）。
