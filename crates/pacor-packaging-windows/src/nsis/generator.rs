@@ -7,6 +7,7 @@ use std::{fs, io};
 use anyhow::Result;
 
 use pacor_core::error::{BuildError, Error};
+use pacor_core::packaging::windows_version;
 use pacor_core::utils::template::render_template;
 use pacor_core::{config::AppConfig, i18n::Locale};
 
@@ -33,36 +34,6 @@ pub(super) fn nsis_lang_code(locale: &Locale) -> &'static str {
 /// the constant is the upper-cased language name with a `LANG_` prefix.
 fn nsis_lang_constant(lang_code: &str) -> String {
     format!("LANG_{}", lang_code.to_uppercase())
-}
-
-/// Highest value NSIS accepts for one `VIProductVersion` component.
-const NSIS_VERSION_COMPONENT_MAX: u32 = u16::MAX as u32;
-
-/// Converts a pubspec version into the `X.X.X.X` form `VIProductVersion` needs.
-///
-/// Pubspec versions are semver, and Flutter's default is `1.0.0+1`: the build
-/// number is a separate field, so it becomes the fourth component
-/// (`1.0.0.1`). Pre-release identifiers are dropped (`1.2.0-beta.1+7` becomes
-/// `1.2.0.7`) and components are clamped, because Windows version fields are
-/// 16-bit.
-fn nsis_product_version(version: &str) -> String {
-    /// Parses one dotted component, ignoring anything non-numeric.
-    fn component(value: &str) -> Option<u32> {
-        let digits: String = value.chars().take_while(char::is_ascii_digit).collect();
-        digits.parse().ok()
-    }
-
-    let (base, build) = version.split_once('+').unwrap_or((version, ""));
-
-    let mut components: Vec<u32> = base.split('.').map_while(component).take(3).collect();
-    components.resize(3, 0);
-    components.push(component(build).unwrap_or(0));
-
-    components
-        .iter()
-        .map(|component| component.min(&NSIS_VERSION_COMPONENT_MAX).to_string())
-        .collect::<Vec<_>>()
-        .join(".")
 }
 
 /// Encapsulates all language-specific content for NSIS script generation.
@@ -163,7 +134,7 @@ impl<'a> NSISGenerator<'a> {
 
         let mut version_info_lines = vec![format!(
             "VIProductVersion \"{}\"",
-            nsis_product_version(self.version)
+            windows_version(self.version)
         )];
         let mut localized_strings = Vec::with_capacity(locale_count);
 
@@ -419,42 +390,6 @@ mod tests {
         assert_eq!(nsis_lang_constant("SimpChinese"), "LANG_SIMPCHINESE");
         assert_eq!(nsis_lang_constant("TradChinese"), "LANG_TRADCHINESE");
         assert_eq!(nsis_lang_constant("Japanese"), "LANG_JAPANESE");
-    }
-
-    /// `VIProductVersion` rejects anything but four numeric components, and the
-    /// Flutter default version is `1.0.0+1`.
-    #[test]
-    fn the_product_version_is_always_four_numeric_components() {
-        for (version, expected) in [
-            ("1.0.0+1", "1.0.0.1"),
-            ("1.0.0", "1.0.0.0"),
-            ("2.3.4+56", "2.3.4.56"),
-            ("1.0.0-beta.1+7", "1.0.0.7"),
-            ("1.2", "1.2.0.0"),
-            ("1", "1.0.0.0"),
-            ("", "0.0.0.0"),
-            ("1.0.0+", "1.0.0.0"),
-        ] {
-            let rendered = nsis_product_version(version);
-
-            assert_eq!(rendered, expected, "version {version:?}");
-            assert_eq!(
-                rendered.split('.').count(),
-                4,
-                "version {version:?} produced {rendered}"
-            );
-            assert!(
-                rendered
-                    .split('.')
-                    .all(|part| part.parse::<u32>().is_ok_and(|n| n <= u32::from(u16::MAX))),
-                "version {version:?} produced out-of-range components: {rendered}"
-            );
-        }
-    }
-
-    #[test]
-    fn oversized_version_components_are_clamped() {
-        assert_eq!(nsis_product_version("70000.0.0+80000"), "65535.0.0.65535");
     }
 
     /// The template's own example (`${NSISDIR}\languages\…`) points at a

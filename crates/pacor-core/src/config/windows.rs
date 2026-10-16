@@ -134,6 +134,25 @@ impl WindowsConfig {
             .map(str::trim)
             .filter(|url| !url.is_empty())
     }
+
+    /// MSI `UpgradeCode`, derived from the application when not configured.
+    ///
+    /// The `UpgradeCode` decides which earlier products an installation may
+    /// replace, so it has to stay identical across releases. Deriving it from
+    /// the name and publisher means a project does not have to invent a GUID,
+    /// while `msi_upgrade_code` still pins it explicitly when the app is renamed
+    /// or handed to another publisher.
+    pub fn resolved_upgrade_code(&self, app_name: &str, publisher: &str) -> String {
+        if let Some(code) = self.msi_upgrade_code.as_deref()
+            && !code.trim().is_empty()
+        {
+            return code.trim().to_string();
+        }
+
+        crate::packaging::deterministic_uuid_v5(&format!(
+            "pacor:windows:msi:{app_name}:{publisher}"
+        ))
+    }
 }
 
 impl Default for WindowsConfig {

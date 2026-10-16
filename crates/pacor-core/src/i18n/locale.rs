@@ -68,6 +68,22 @@ impl Locale {
             Self::JaJp => "ja_JP",
         }
     }
+
+    /// WiX/.NET culture name, e.g. `zh-cn`.
+    ///
+    /// WiX names localization files and `light -cultures:` values after .NET
+    /// cultures: the language is lower-case and the region upper-case. Windows
+    /// Installer matches them case-insensitively, but a mismatched spelling in
+    /// a file name means `light` cannot find the localization at all.
+    pub fn as_wix_culture(&self) -> &'static str {
+        match self {
+            Self::EnUs => "en-us",
+            Self::EnGb => "en-gb",
+            Self::ZhCn => "zh-cn",
+            Self::ZhTw => "zh-tw",
+            Self::JaJp => "ja-jp",
+        }
+    }
 }
 
 impl Display for Locale {
@@ -139,12 +155,36 @@ mod tests {
     }
 
     #[test]
-    fn the_three_spellings_are_distinct_where_it_matters() {
+    fn the_four_spellings_are_distinct_where_it_matters() {
         // Each consumer needs a different spelling; mixing them up silently
         // disables localisation on the respective platform.
         assert_eq!(Locale::ZhCn.as_str(), "zh-CN"); // pacor.toml / display
         assert_eq!(Locale::ZhCn.as_posix(), "zh_CN"); // desktop entry
         assert_eq!(Locale::ZhCn.as_apple(), "zh-Hans"); // .lproj
+        assert_eq!(Locale::ZhCn.as_wix_culture(), "zh-cn"); // WiX / MSI
+    }
+
+    #[test]
+    fn test_locale_wix_cultures() {
+        assert_eq!(Locale::EnUs.as_wix_culture(), "en-us");
+        assert_eq!(Locale::EnGb.as_wix_culture(), "en-gb");
+        assert_eq!(Locale::ZhCn.as_wix_culture(), "zh-cn");
+        assert_eq!(Locale::ZhTw.as_wix_culture(), "zh-tw");
+        assert_eq!(Locale::JaJp.as_wix_culture(), "ja-jp");
+
+        // WiX culture names never use the POSIX underscore, and the language
+        // part is lower-case.
+        for locale in [
+            Locale::EnUs,
+            Locale::EnGb,
+            Locale::ZhCn,
+            Locale::ZhTw,
+            Locale::JaJp,
+        ] {
+            let culture = locale.as_wix_culture();
+            assert!(!culture.contains('_'), "{culture}");
+            assert_eq!(culture, culture.to_lowercase(), "{culture}");
+        }
     }
 
     #[test]
