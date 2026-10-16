@@ -58,22 +58,23 @@ GPO / Intune / SCCM 部署，并让安装过程可完全脚本化：
 
 `pacor cache clean` 一并清除。
 
-## 4. 模板契约：需要新的 tag（1.1）
+## 4. 模板契约：新 tag `1.1`（已发布）
 
 模板 tag 不可变（且采用 GNU 风格版本号，见 [README](../README.md#build-templates)），MSI 需要
-新增模板文件，因此**必须发 `1.1`**：
+新增模板文件，因此发了 `1.1`：
 
 ```
 windows/wix/main.wxs           # 产品、界面、升级、快捷方式、ARP，含 {{占位符}}
 windows/wix/culture.wxl.tmpl   # 每种语言渲染一份 <culture>.wxl
 ```
 
-`1.1` 内容 = `1.0`（即历史上的 `v1`）的 `windows/nsis/**` **原样保留** + 上述新增。
-`TEMPLATE_REF` 从 `v1` 提到 `1.1` 后，缓存路径变化会同时失效旧的 NSIS 缓存并重新下载——
-这正是设计意图（一个 pacor 版本只认一个模板契约）。
+`1.1` 内容 = `1.0`（即历史上的 `v1`）的 `windows/nsis/**` 与 `linux/**` **逐字节不变**
+（11 个 blob 的 SHA 与 `v1` 相同，可用 `gh api repos/pacor-rs/tools/compare/v1...1.1` 复核）
++ 上述新增 + README 补充的 WiX 契约说明。`TEMPLATE_REF` 从 `v1` 提到 `1.1` 后，缓存路径变化
+会同时失效旧的 NSIS 缓存并重新下载——这正是设计意图（一个 pacor 版本只认一个模板契约）。
 
-两份模板的权威副本同时放在本仓库的 `tools/windows/wix/` 下，发 `1.1` 时把它们并入
-`pacor-rs/tools` 即可（与 `tools/macos/` 的存放方式一致）。
+两份模板的权威副本同时放在本仓库的 `tools/windows/wix/` 下（与 `tools/macos/` 的存放方式
+一致），修改模板时以此为准，再按上面的流程发新 tag。
 
 占位符（沿用 `render_template`，未替换即构建失败）：
 
@@ -354,7 +355,7 @@ per-user 安装会额外引入两条硬约束，**本方案因只做 per-machine
 | 阶段 | 内容 | 状态 |
 | ---- | ---- | ---- |
 | M0 | 固定 WiX、harvester 原型、per-machine 配方、ICE 清零、`/a` 比对、权限与位数结论 | **已完成**（脚本见附录） |
-| M1 | `[platforms.windows]` 配置 + `msi/` 模块 + 模板 `1.1` + 每语言 MSI + 签名 + `pacor check` 提示工具链 + 文档 | **已完成**（`6d56558`） |
+| M1 | `[platforms.windows]` 配置 + `msi/` 模块 + 模板 `1.1`（已发布） + 每语言 MSI + 签名 + `pacor check` 提示工具链 + 文档 | **已完成**（`6d56558`） |
 | M2 | 单元测试（harvester/生成器/工具链/代码页/Lcid）+ opt-in 端到端（真实 candle/light + `/a` 比对） | **已完成** |
 | M2.5 | 提升权限会话下补跑 `msiexec /i` / `/x`，确认 ARP 与快捷方式落点 | 待做（本机无法提权） |
 | M3 | 可选：`installer_formats` 集合（NSIS 与 MSI 同时产出）、语言变换单文件多语言、NSIS 版共存检测（`LaunchCondition`）、VC++ 运行时合并模块 | 待定 |
