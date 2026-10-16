@@ -84,6 +84,38 @@ impl Locale {
             Self::JaJp => "ja-jp",
         }
     }
+
+    /// Windows locale id (LCID) of the package built for this locale, e.g.
+    /// `2052` for Simplified Chinese.
+    ///
+    /// `Product/@Language` carries it, which is what makes a localized MSI
+    /// report the matching language in "Apps & features" and lets Windows pick
+    /// the right language for the progress dialogs it draws itself.
+    pub fn as_windows_lcid(&self) -> u32 {
+        match self {
+            Self::EnUs => 1033,
+            Self::EnGb => 2057,
+            Self::ZhCn => 2052,
+            Self::ZhTw => 1028,
+            Self::JaJp => 1041,
+        }
+    }
+
+    /// Code page of an MSI localization, e.g. `936` for Simplified Chinese.    ///
+    /// Windows Installer stores every string in one code page per package, so a
+    /// localized MSI needs the matching one. WiX infers it from the culture, but
+    /// pacor writes it explicitly: it is the setting that explains `LGHT0311`
+    /// when a string uses a character the code page cannot represent (`©` is not
+    /// in code page 936, for example), and making it visible turns that failure
+    /// into something a user can act on.
+    pub fn as_msi_codepage(&self) -> u32 {
+        match self {
+            Self::EnUs | Self::EnGb => 1252, // Windows-1252
+            Self::ZhCn => 936,               // GBK
+            Self::ZhTw => 950,               // Big5
+            Self::JaJp => 932,               // Shift-JIS
+        }
+    }
 }
 
 impl Display for Locale {
@@ -162,6 +194,27 @@ mod tests {
         assert_eq!(Locale::ZhCn.as_posix(), "zh_CN"); // desktop entry
         assert_eq!(Locale::ZhCn.as_apple(), "zh-Hans"); // .lproj
         assert_eq!(Locale::ZhCn.as_wix_culture(), "zh-cn"); // WiX / MSI
+    }
+
+    #[test]
+    fn test_locale_windows_lcids() {
+        // The LCID goes into Product/@Language, so it must be the locale's own.
+        assert_eq!(Locale::EnUs.as_windows_lcid(), 1033);
+        assert_eq!(Locale::EnGb.as_windows_lcid(), 2057);
+        assert_eq!(Locale::ZhCn.as_windows_lcid(), 2052);
+        assert_eq!(Locale::ZhTw.as_windows_lcid(), 1028);
+        assert_eq!(Locale::JaJp.as_windows_lcid(), 1041);
+    }
+
+    #[test]
+    fn test_locale_msi_codepages() {
+        // MSI stores every string in one code page per package; the values must
+        // be the ones WiX would infer from the culture.
+        assert_eq!(Locale::EnUs.as_msi_codepage(), 1252);
+        assert_eq!(Locale::EnGb.as_msi_codepage(), 1252);
+        assert_eq!(Locale::ZhCn.as_msi_codepage(), 936);
+        assert_eq!(Locale::ZhTw.as_msi_codepage(), 950);
+        assert_eq!(Locale::JaJp.as_msi_codepage(), 932);
     }
 
     #[test]

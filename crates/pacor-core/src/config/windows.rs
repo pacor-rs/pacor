@@ -1,8 +1,10 @@
-//! Windows platform configuration (NSIS installer / portable archive).
+//! Windows platform configuration (NSIS or MSI installer / portable archive).
 
 use std::{fmt::Display, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
+
+use crate::i18n::Locale;
 
 /// Supported Windows installer formats.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -12,7 +14,8 @@ pub enum InstallerFormat {
     #[default]
     Nsis,
 
-    /// Windows Installer (MSI) package. Not implemented yet.
+    /// Windows Installer (MSI) package. Installs per-machine (below
+    /// `%ProgramFiles%`) and needs administrator rights to install.
     Msi,
 }
 
@@ -86,6 +89,17 @@ pub struct WindowsConfig {
     /// MSI upgrade code (GUID). Only relevant when `installer_format = "msi"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub msi_upgrade_code: Option<String>,
+
+    /// Code page of the MSI package, e.g. `65001` for UTF-8.
+    ///
+    /// Only relevant when `installer_format = "msi"`. Windows Installer stores
+    /// every string in a single code page per package and pacor defaults to the
+    /// one belonging to the locale. Setting this is the way out when a localized
+    /// string uses a character that code page cannot represent — a `©` in a
+    /// `zh-CN` package fails to build with `LGHT0311`, because code page 936 has
+    /// no `©`. Rewording is usually the better fix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub msi_codepage: Option<u32>,
 }
 
 fn default_portable_build() -> bool {
@@ -135,8 +149,7 @@ impl WindowsConfig {
             .filter(|url| !url.is_empty())
     }
 
-    /// MSI `UpgradeCode`, derived from the application when not configured.
-    ///
+    /// MSI `UpgradeCode`, derived from the application when not configured.    ///
     /// The `UpgradeCode` decides which earlier products an installation may
     /// replace, so it has to stay identical across releases. Deriving it from
     /// the name and publisher means a project does not have to invent a GUID,
@@ -153,6 +166,16 @@ impl WindowsConfig {
             "pacor:windows:msi:{app_name}:{publisher}"
         ))
     }
+
+    /// Code page to write into an MSI localization for `locale`.
+    ///
+    /// Defaults to the locale's own code page, which is what WiX would infer;
+    /// [`WindowsConfig::msi_codepage`] overrides it for projects whose text does
+    /// not fit.
+    pub fn resolved_msi_codepage(&self, locale: &Locale) -> u32 {
+        self.msi_codepage
+            .unwrap_or_else(|| locale.as_msi_codepage())
+    }
 }
 
 impl Default for WindowsConfig {
@@ -165,6 +188,7 @@ impl Default for WindowsConfig {
             certificate_password: None,
             timestamp_url: default_timestamp_url(),
             msi_upgrade_code: None,
+            msi_codepage: None,
             build_portable: true,
         }
     }
@@ -197,5 +221,61 @@ mod tests {
 
         assert!(config.timestamp_url().is_some());
         assert!(!config.is_portable_build_enabled());
+    }
+
+    /// The code page is what explains `LGHT0311`, so its default has to follow
+    /// the locale and the override has to win.
+    #[test]
+    fn the_msi_codepage_follows_the_locale_unless_overridden() {
+        let config = WindowsConfig::default();
+
+        assert_eq!(config.resolved_msi_codepage(&Locale::EnUs), 1252);
+        assert_eq!(config.resolved_msi_codepage(&Locale::ZhCn), 936);
+        assert_eq!(config.msi_codepage, None);
+
+        let config: WindowsConfig = toml::from_str("msi_codepage = 65001").unwrap();
+        assert_eq!(config.resolved_msi_codepage(&Locale::ZhCn), 65001);
+        assert_eq!(config.resolved_msi_codepage(&Locale::EnUs), 65001);
+    }
+
+    /// A project that never configures a GUID still gets a stable one, and the
+    /// name and publisher are what it is derived from.
+    #[test]
+    fn the_upgrade_code_is_derived_and_stable() {
+        let config = WindowsConfig::default();
+
+        let derived = config.resolved_upgrade_code("my_app", "My Company");
+        assert_eq!(
+            derived,
+            config.resolved_upgrade_code("my_app", "My Company")
+        );
+        assert_ne!(
+            derived,
+            config.resolved_upgrade_code("my_app", "Other Company")
+        );
+        assert_ne!(
+            derived,
+            config.resolved_upgrade_code("other_app", "My Company")
+        );
+        assert!(
+            derived.starts_with('{') && derived.ends_with('}'),
+            "{derived}"
+        );
+
+        let configured: WindowsConfig =
+            toml::from_str("msi_upgrade_code = \"{11223344-5566-7788-99AA-BBCCDDEEFF00}\"")
+                .unwrap();
+        assert_eq!(
+            configured.resolved_upgrade_code("my_app", "My Company"),
+            "{11223344-5566-7788-99AA-BBCCDDEEFF00}"
+        );
+
+        // An empty value means "derive it", not "use an empty GUID".
+        let empty: WindowsConfig = toml::from_str("msi_upgrade_code = \"  \"").unwrap();
+        assert!(
+            empty
+                .resolved_upgrade_code("my_app", "My Company")
+                .starts_with('{')
+        );
     }
 }

@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Pacor's MSI template. Every double-braced placeholder is replaced by the
+  Windows backend before the file reaches `candle`; a placeholder pacor does not
+  know about fails the build instead of leaking into the output.
+
+  The package is per-machine: the payload installs below Program Files and
+  installing it needs administrator rights, unlike the per-user NSIS installer.
+
+  One `main.wxs` is rendered per locale, because `Product/@Language` carries the
+  locale's LCID and cannot be localized through the `.wxl` files.
+
+  Facts worth keeping in mind when editing (all verified against WiX 3.14, see
+  docs/MSI.md):
+
+    * shortcut components must key off HKCU (ICE38/ICE43) even though the
+      package is per-machine, so their keypaths are registry values there;
+    * payload components keep their file as keypath, which is only legal because
+      the installation is not under the user profile;
+    * `ARPNOMODIFY` and friends are authored by WixUI_InstallDir itself —
+      repeating them fails with a duplicate-symbol error;
+    * `Platform="x64"` must match `candle -arch x64`, otherwise components land
+      in the 32-bit registry view and 64-bit directories trigger ICE80.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+    <Product Id="*"
+             Name="!(loc.ProductName)"
+             Language="{{PRODUCT_LANGUAGE}}"
+             Version="{{PRODUCT_VERSION}}"
+             Manufacturer="!(loc.Manufacturer)"
+             UpgradeCode="{{UPGRADE_CODE}}">
+
+        <Package InstallerVersion="500"
+                 Compressed="yes"
+                 Platform="x64"
+                 InstallScope="perMachine"
+                 InstallPrivileges="elevated"
+                 Description="!(loc.ProductDescription)" />
+
+        <MajorUpgrade AllowSameVersionUpgrades="yes"
+                      DowngradeErrorMessage="!(loc.DowngradeError)" />
+
+        <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+        <Icon Id="AppIcon.ico" SourceFile="{{APP_ICON_PATH}}" />
+        <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+        <Property Id="ARPURLINFOABOUT" Value="{{APP_URL}}" />
+        <Property Id="ARPCOMMENTS" Value="!(loc.LegalCopyright)" />
+
+        <UIRef Id="WixUI_InstallDir" />
+        <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
+
+        <Directory Id="TARGETDIR" Name="SourceDir">
+            <Directory Id="ProgramFiles64Folder">
+                <Directory Id="INSTALLDIR" Name="{{APP_NAME}}">
+                    <Component Id="cmp_INSTALLDIR" Guid="{{INSTALL_DIR_COMPONENT_GUID}}">
+                        <RemoveFolder Id="RemoveINSTALLDIR" On="uninstall" />
+                        <RegistryValue Root="HKLM" Key="Software\{{APP_NAME}}"
+                                       Name="InstallDir" Type="string"
+                                       Value="[INSTALLDIR]" KeyPath="yes" />
+                    </Component>
+                </Directory>
+            </Directory>
+            <Directory Id="ProgramMenuFolder">
+                <Directory Id="ApplicationProgramsFolder" Name="!(loc.ProductName)" />
+            </Directory>
+            <Directory Id="DesktopFolder" />
+        </Directory>
+
+        <DirectoryRef Id="ApplicationProgramsFolder">
+            <Component Id="cmp_StartMenuShortcut" Guid="{{START_MENU_COMPONENT_GUID}}">
+                <Shortcut Id="StartMenuShortcut"
+                          Name="!(loc.ProductName)"
+                          Target="[INSTALLDIR]{{APP_EXECUTABLE}}"
+                          WorkingDirectory="INSTALLDIR" />
+                <Shortcut Id="UninstallShortcut"
+                          Name="!(loc.UninstallShortcut)"
+                          Target="[SystemFolder]msiexec.exe"
+                          Arguments="/x [ProductCode]" />
+                <RemoveFolder Id="RemoveApplicationProgramsFolder"
+                              Directory="ApplicationProgramsFolder"
+                              On="uninstall" />
+                <RegistryValue Root="HKCU" Key="Software\{{APP_NAME}}"
+                               Name="StartMenuShortcut" Type="integer" Value="1"
+                               KeyPath="yes" />
+            </Component>
+        </DirectoryRef>
+
+        <DirectoryRef Id="DesktopFolder">
+            <Component Id="cmp_DesktopShortcut" Guid="{{DESKTOP_COMPONENT_GUID}}">
+                <Shortcut Id="DesktopShortcut"
+                          Name="!(loc.ProductName)"
+                          Target="[INSTALLDIR]{{APP_EXECUTABLE}}"
+                          WorkingDirectory="INSTALLDIR" />
+                <RegistryValue Root="HKCU" Key="Software\{{APP_NAME}}"
+                               Name="DesktopShortcut" Type="integer" Value="1"
+                               KeyPath="yes" />
+            </Component>
+        </DirectoryRef>
+
+        <Feature Id="MainFeature" Title="!(loc.FeatureMain)" Level="1">
+            <ComponentGroupRef Id="{{PAYLOAD_COMPONENT_GROUP}}" />
+            <ComponentRef Id="cmp_INSTALLDIR" />
+            <ComponentRef Id="cmp_StartMenuShortcut" />
+            <ComponentRef Id="cmp_DesktopShortcut" />
+        </Feature>
+    </Product>
+</Wix>

@@ -23,6 +23,7 @@
 extern crate tracing;
 
 mod flutter;
+mod msi;
 mod nsis;
 mod runner;
 mod signing;
@@ -32,7 +33,7 @@ pub(crate) mod test_support;
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 
 use pacor_core::{
     config::{FlutterBuildMode, InstallerFormat, PacorConfig, WindowsConfig},
@@ -50,6 +51,7 @@ use pacor_core::{
     },
 };
 
+use crate::msi::MsiBuilder;
 use crate::nsis::NsisBuilder;
 
 pub struct WindowsBuilder<'a> {
@@ -153,8 +155,8 @@ impl<'a> BundleBuilder for WindowsBuilder<'a> {
             &self.output_directory,
         )?;
 
-        // NSIS uses the runner icon for the installer and the shortcuts, so it
-        // cannot be replaced by a placeholder.
+        // NSIS and MSI both use the runner icon for the installer and the
+        // shortcuts, so it cannot be replaced by a placeholder.
         let icon_path = self.application_icon_path();
         if !icon_path.exists() {
             return Err(ValidationError::FileValidation {
@@ -165,6 +167,17 @@ impl<'a> BundleBuilder for WindowsBuilder<'a> {
                     .to_string(),
             }
             .into());
+        }
+
+        // The WiX toolset is a sizeable download; say so instead of surprising
+        // the user in the middle of a build.
+        if matches!(self.windows_config.installer_format(), InstallerFormat::Msi)
+            && !MsiBuilder::is_cached(&self.tools_dir)
+        {
+            info!(
+                path = %MsiBuilder::cache_dir(&self.tools_dir).display(),
+                "The pinned WiX toolset will be downloaded by the next MSI build"
+            );
         }
 
         // Validate signing config, including that a signing tool is reachable.
@@ -182,13 +195,6 @@ impl<'a> BundleBuilder for WindowsBuilder<'a> {
         command_output_mode: CommandOutputMode,
     ) -> Result<Self::Output> {
         info!("Starting Windows bundle build...");
-
-        // TODO: Remove this when MSI support is implemented
-        if matches!(self.windows_config.installer_format(), InstallerFormat::Msi) {
-            return Err(anyhow!(
-                "MSI installer support is not implemented yet; use `installer_format = \"nsis\"`"
-            ));
-        }
 
         // Ensure output directory exists and validate permissions
         pacor_core::packaging::validate_directory_permissions(
@@ -208,15 +214,24 @@ impl<'a> BundleBuilder for WindowsBuilder<'a> {
         // fail early with a useful message when it is not there.
         let executable = self.main_executable_path()?;
 
-        // NSIS embeds the file contents, so the application has to be signed
-        // before the installer is compiled; the portable archive is packed from
-        // the same signed file.
+        // Both installer formats embed the file contents, so the application has
+        // to be signed before the installer is compiled; the portable archive is
+        // packed from the same signed file.
         if let Some(signer) = self.signer()? {
             signer.sign(&executable, &command_output_mode)?;
         }
 
-        let installer_artifact = self.build_installer(&command_output_mode)?;
-        let mut artifacts = vec![installer_artifact];
+        // Every installer is signed after it is produced, because signing
+        // rewrites the file and the checksum next to it.
+        let mut artifacts = self.build_installers(&command_output_mode)?;
+        if let Some(signer) = self.signer()? {
+            for artifact in &mut artifacts {
+                signer.sign(artifact.file(), &command_output_mode)?;
+                *artifact =
+                    pacor_core::packaging::create_artifact_with_checksum(artifact.file().clone())?;
+            }
+        }
+
         if self.windows_config.is_portable_build_enabled() {
             let portable_artifact = self.build_portable_archive()?;
             artifacts.push(portable_artifact);
@@ -341,7 +356,7 @@ impl WindowsBuilder<'_> {
             &icon_path,
             &default_legal_copyright,
         );
-        let mut artifact = builder.build(
+        let artifact = builder.build(
             self.flutter_project.name(),
             self.flutter_project.version(),
             &self.target_arch,
@@ -350,16 +365,36 @@ impl WindowsBuilder<'_> {
             command_output_mode,
         )?;
 
-        // Sign the installer itself as well: the installed files are only as
-        // trustworthy as the executable that wrote them. Signing rewrites the
-        // file, so the checksum written next to it has to be regenerated.
-        if let Some(signer) = self.signer()? {
-            signer.sign(artifact.file(), command_output_mode)?;
-            artifact =
-                pacor_core::packaging::create_artifact_with_checksum(artifact.file().clone())?;
-        }
-
         Ok(artifact)
+    }
+
+    /// Builds the MSI installer(s), one per configured locale.
+    ///
+    /// The package is per-machine and needs administrator rights to install,
+    /// unlike the per-user NSIS one; see `docs/MSI.md`.
+    fn build_msi_installer(
+        &self,
+        command_output_mode: &CommandOutputMode,
+    ) -> Result<Vec<BuildArtifact>> {
+        let wix_dir = MsiBuilder::cache_dir(&self.tools_dir);
+        let executable_name = self.find_main_executable_name()?;
+        let icon_path = self.application_icon_path();
+
+        let builder = MsiBuilder::new(
+            &self.config.app,
+            self.windows_config,
+            &self.flutter_project,
+            &self.target_arch,
+            &wix_dir,
+            &icon_path,
+            &executable_name,
+        );
+
+        builder.build(
+            self.flutter_build_path(),
+            &self.output_directory,
+            command_output_mode,
+        )
     }
 
     /// Builds a portable ZIP archive of the application.
@@ -400,12 +435,13 @@ impl WindowsBuilder<'_> {
     }
 
     /// Dispatches installer build based on configured type.
-    fn build_installer(&self, command_output_mode: &CommandOutputMode) -> Result<BuildArtifact> {
+    fn build_installers(
+        &self,
+        command_output_mode: &CommandOutputMode,
+    ) -> Result<Vec<BuildArtifact>> {
         match self.windows_config.installer_format() {
-            InstallerFormat::Nsis => self.build_nsis_installer(command_output_mode),
-            InstallerFormat::Msi => Err(anyhow!(
-                "MSI installer support is not implemented yet".to_string(),
-            )),
+            InstallerFormat::Nsis => Ok(vec![self.build_nsis_installer(command_output_mode)?]),
+            InstallerFormat::Msi => self.build_msi_installer(command_output_mode),
         }
     }
 

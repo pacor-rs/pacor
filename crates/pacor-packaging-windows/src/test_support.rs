@@ -20,6 +20,9 @@ use pacor_core::{
 /// Environment variable pointing at a prepared NSIS toolchain directory.
 pub(crate) const NSIS_TOOLCHAIN_ENV: &str = "PACOR_NSIS_TOOLCHAIN_DIR";
 
+/// Environment variable pointing at a prepared WiX toolset directory.
+pub(crate) const WIX_TOOLSET_ENV: &str = "PACOR_MSI_TOOLCHAIN_DIR";
+
 /// Metadata for `locale`, with locally distinct values so that generated
 /// content can be told apart.
 fn metadata(locale: &Locale) -> AppMetadata {
@@ -136,6 +139,29 @@ pub(crate) fn require_nsis_toolchain() -> PathBuf {
         "{} does not contain the pinned template.nsi",
         directory.display()
     );
+
+    directory
+}
+
+/// The WiX directory an ignored test was pointed at.
+///
+/// Unlike the NSIS one, this directory also holds the WiX *templates* of the
+/// pinned tag, because the toolset is downloaded from the WiX release and the
+/// templates from `pacor-rs/tools` (see `docs/MSI.md`).
+pub(crate) fn require_wix_toolset() -> PathBuf {
+    let directory = std::env::var_os(WIX_TOOLSET_ENV)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            panic!("set {WIX_TOOLSET_ENV} to a prepared WiX directory (see docs/MSI.md)")
+        });
+
+    for file in ["candle.exe", "light.exe", "WixUIExtension.dll", "main.wxs"] {
+        assert!(
+            directory.join(file).is_file(),
+            "{} does not contain {file}",
+            directory.display()
+        );
+    }
 
     directory
 }
