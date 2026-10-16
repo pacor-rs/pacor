@@ -28,7 +28,13 @@
 //!
 //! Invalid mirror URLs will result in download failures with network errors.
 
-use std::{borrow::Cow, io::Read};
+use std::{
+    borrow::Cow,
+    fmt,
+    io::{self, Read},
+    thread,
+    time::Duration,
+};
 
 use ureq::{
     Agent, Proxy,
@@ -37,7 +43,9 @@ use ureq::{
     typestate::AgentScope,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+
+use tracing::{debug, info, warn};
 
 // === Environment variable keys ===
 const ENV_GITHUB_MIRROR_BASE_URL: &str = "PACOR_GITHUB_MIRROR_BASE_URL";
@@ -193,12 +201,17 @@ fn build_mirror_url_from_base(original_url: &str) -> Option<String> {
 // === HTTP client setup ===
 
 fn create_base_agent_builder() -> ConfigBuilder<AgentScope> {
-    Agent::config_builder().tls_config(
-        TlsConfig::builder()
-            .provider(TlsProvider::NativeTls)
-            .root_certs(RootCerts::PlatformVerifier)
-            .build(),
-    )
+    Agent::config_builder()
+        .tls_config(
+            TlsConfig::builder()
+                .provider(TlsProvider::NativeTls)
+                .root_certs(RootCerts::PlatformVerifier)
+                .build(),
+        )
+        // Statuses are inspected by the download loop rather than turned into
+        // errors here: only it knows whether a 416 means "already complete" and
+        // whether a 5xx is worth another attempt.
+        .http_status_as_error(false)
 }
 
 fn create_default_agent() -> Agent {
@@ -240,19 +253,344 @@ fn prepare_download(original_url: &str) -> (Agent, String) {
     }
 }
 
+// === Downloading, with resume ===
+
+/// How many times a transfer is attempted before it is reported as failed.
+///
+/// A proxy or mirror that drops a large file part way through is common enough
+/// that a single attempt is not a policy — and every attempt after the first
+/// resumes instead of starting over.
+const DOWNLOAD_ATTEMPTS: u32 = 4;
+
+/// Pause between attempts, so an overloaded mirror gets room to recover.
+const RETRY_DELAY: Duration = Duration::from_secs(2);
+
+/// How much has to arrive before progress is reported again.
+///
+/// The WiX toolset is nearly 40 MB: a transfer that prints nothing for minutes is
+/// indistinguishable from one that has hung.
+const PROGRESS_STEP: u64 = 8 * 1024 * 1024;
+
+/// Size of the buffer a response body is read through.
+const READ_CHUNK: usize = 64 * 1024;
+
+/// Attempts and pacing of the retry loop.
+///
+/// A struct rather than constants so tests can exercise the loop without waiting.
+#[derive(Debug, Clone, Copy)]
+struct RetryPolicy {
+    attempts: u32,
+    delay: Duration,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            attempts: DOWNLOAD_ATTEMPTS,
+            delay: RETRY_DELAY,
+        }
+    }
+}
+
 /// Downloads a file from the given URL, optionally using a configured GitHub mirror.
+///
+/// An interrupted transfer is resumed rather than restarted: the bytes already
+/// received are kept and the next attempt asks for the remainder with a `Range`
+/// header. This matters for the WiX toolset, which is nearly 40 MB and is
+/// regularly cut short by mirrors and proxies.
 pub fn download_file(url: &str) -> Result<Vec<u8>> {
     let (agent, final_url) = prepare_download(url);
     info!(url = %final_url, "Downloading");
 
-    let response = agent.get(&final_url).call()?;
+    download_with_resume(&agent, &final_url, RetryPolicy::default())
+        .with_context(|| format!("failed to download {final_url}"))
+}
+
+/// Runs [`fetch_into`] until the file is complete or the attempts run out.
+fn download_with_resume(agent: &Agent, url: &str, policy: RetryPolicy) -> Result<Vec<u8>> {
+    let attempts = policy.attempts.max(1);
     let mut bytes = Vec::new();
-    response.into_body().into_reader().read_to_end(&mut bytes)?;
-    Ok(bytes)
+    // Kept across attempts so that a failure can say how far it got, even when
+    // the interruption surfaces as a read error instead of a short body.
+    let mut expected: Option<u64> = None;
+    let mut last_failure = None;
+
+    for attempt in 1..=attempts {
+        if attempt > 1 {
+            warn!(
+                url,
+                attempt,
+                attempts,
+                received = bytes.len(),
+                "Retrying the download, keeping what has been received"
+            );
+            thread::sleep(policy.delay);
+        }
+
+        match fetch_into(agent, url, &mut bytes, &mut expected) {
+            Ok(()) => {
+                debug!(url, bytes = bytes.len(), "Download complete");
+                return Ok(bytes);
+            }
+            Err(failure) if failure.is_retryable() => {
+                debug!(url, error = %failure, "Download attempt failed");
+                last_failure = Some(failure);
+            }
+            Err(failure) => return Err(failure.into_error(bytes.len(), expected)),
+        }
+    }
+
+    Err(last_failure
+        .expect("the loop always runs at least once")
+        .into_error(bytes.len(), expected))
+}
+
+/// Performs one attempt, appending whatever arrives to `bytes`.
+///
+/// Returns `Ok(())` only once the body is complete, including when the server
+/// reports that the requested range starts past the end of the file.
+fn fetch_into(
+    agent: &Agent,
+    url: &str,
+    bytes: &mut Vec<u8>,
+    expected: &mut Option<u64>,
+) -> Result<(), FetchFailure> {
+    let resume_from = bytes.len() as u64;
+
+    let mut request = agent.get(url);
+    if resume_from > 0 {
+        request = request.header("Range", format!("bytes={resume_from}-"));
+    }
+
+    let response = request.call().map_err(FetchFailure::Transport)?;
+    let status = response.status().as_u16();
+    let content_length = header_number(response.headers(), "content-length");
+    let content_range = response
+        .headers()
+        .get("content-range")
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_content_range);
+    let is_encoded = response
+        .headers()
+        .get("content-encoding")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|encoding| !encoding.eq_ignore_ascii_case("identity"));
+
+    let expected_total = match status {
+        // The whole file, so anything received before is superseded.
+        200 => {
+            if resume_from > 0 {
+                debug!(url, "The server ignored the range request, starting over");
+            }
+            bytes.clear();
+            content_length
+        }
+        // The remainder, which has to start where the previous attempt stopped.
+        206 => {
+            let Some(range) = content_range else {
+                return Err(FetchFailure::Unexpected(format!(
+                    "{url} answered 206 without a Content-Range header"
+                )));
+            };
+            match range.start {
+                Some(start) if start < bytes.len() as u64 => {
+                    // Resumed earlier than asked: drop the bytes past that point.
+                    bytes.truncate(start as usize);
+                }
+                Some(_) => {}
+                None => {
+                    return Err(FetchFailure::Unexpected(format!(
+                        "{url} answered 206 without a range start"
+                    )));
+                }
+            }
+            range
+                .total
+                .or_else(|| content_length.map(|length| bytes.len() as u64 + length))
+        }
+        // The range starts past the end: there is nothing left to fetch.
+        416 => {
+            return match content_range.and_then(|range| range.total) {
+                Some(total) if total == bytes.len() as u64 => Ok(()),
+                _ => Err(FetchFailure::Unexpected(format!(
+                    "{url} answered 416 Range Not Satisfiable"
+                ))),
+            };
+        }
+        // A client error will not improve by asking again.
+        status if (400..500).contains(&status) => {
+            return Err(FetchFailure::Unexpected(format!("{url} answered {status}")));
+        }
+        status => return Err(FetchFailure::Status(status)),
+    };
+
+    *expected = expected_total;
+
+    let mut reader = response.into_body().into_reader();
+    let mut chunk = vec![0u8; READ_CHUNK];
+    let mut reported = bytes.len() as u64;
+
+    loop {
+        let read = reader.read(&mut chunk).map_err(FetchFailure::Read)?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+
+        if bytes.len() as u64 - reported >= PROGRESS_STEP {
+            reported = bytes.len() as u64;
+            info!(
+                url,
+                received = bytes.len(),
+                total = ?expected_total,
+                "Downloading"
+            );
+        }
+    }
+
+    // A body shorter than its declared length means the peer hung up; the bytes
+    // are kept so that the next attempt can resume from them.
+    if !is_encoded
+        && let Some(total) = expected_total
+        && bytes.len() as u64 != total
+    {
+        return Err(FetchFailure::Truncated {
+            received: bytes.len() as u64,
+            expected: total,
+        });
+    }
+
+    Ok(())
+}
+
+/// Reads a header that holds a number, ignoring anything unparsable.
+fn header_number(headers: &ureq::http::HeaderMap, name: &str) -> Option<u64> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse().ok())
+}
+
+/// The start offset and total size a `Content-Range` header names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ContentRange {
+    /// Offset of the first byte in this response, `None` for `bytes */<total>`.
+    start: Option<u64>,
+
+    /// Size of the whole file, `None` when the server does not know it.
+    total: Option<u64>,
+}
+
+/// Parses `bytes 100-499/1234`, `bytes 0-0/*` and the `bytes */1234` form.
+fn parse_content_range(value: &str) -> Option<ContentRange> {
+    let range = value.trim().strip_prefix("bytes")?.trim_start();
+    let (span, total) = range.split_once('/')?;
+
+    let total = match total.trim() {
+        "*" => None,
+        total => Some(total.parse().ok()?),
+    };
+
+    let span = span.trim();
+    if span == "*" {
+        return Some(ContentRange { start: None, total });
+    }
+
+    let (start, _end) = span.split_once('-')?;
+    Some(ContentRange {
+        start: Some(start.trim().parse().ok()?),
+        total,
+    })
+}
+
+/// Why one attempt at a transfer failed.
+#[derive(Debug)]
+enum FetchFailure {
+    /// The request itself failed: connection, TLS, timeout, or a status ureq
+    /// reports as an error.
+    Transport(ureq::Error),
+
+    /// The response body could not be read to the end.
+    Read(io::Error),
+
+    /// The peer stopped short; the bytes received so far are kept.
+    Truncated { received: u64, expected: u64 },
+
+    /// A response the retry loop cannot do anything about.
+    Unexpected(String),
+
+    /// A status that is worth another attempt.
+    Status(u16),
+}
+
+impl FetchFailure {
+    /// Whether another attempt — resuming from what has been received — can help.
+    fn is_retryable(&self) -> bool {
+        match self {
+            Self::Read(_) | Self::Truncated { .. } => true,
+            Self::Status(status) => *status >= 500,
+            Self::Transport(error) => match error {
+                ureq::Error::Io(_)
+                | ureq::Error::Timeout(_)
+                | ureq::Error::ConnectionFailed
+                | ureq::Error::HostNotFound
+                | ureq::Error::Protocol(_) => true,
+                ureq::Error::StatusCode(status) => *status >= 500,
+                _ => false,
+            },
+            Self::Unexpected(_) => false,
+        }
+    }
+
+    /// The error a caller sees once the attempts are exhausted.
+    ///
+    /// `received` and `expected` describe the transfer as a whole: after several
+    /// attempts the question that matters is how much of the file arrived, and a
+    /// bare `Peer disconnected` says nothing about that.
+    fn into_error(self, received: usize, expected: Option<u64>) -> anyhow::Error {
+        let progress = match expected {
+            Some(total) => format!("the transfer stopped after {received} of {total} bytes"),
+            None => format!("the transfer stopped after {received} bytes"),
+        };
+
+        match self {
+            Self::Transport(error) => anyhow::anyhow!("{progress}: {error}"),
+            Self::Read(error) => anyhow::anyhow!("{progress}: {error}"),
+            Self::Truncated { .. } => anyhow::anyhow!(progress),
+            Self::Unexpected(message) => anyhow::anyhow!(message),
+            Self::Status(status) => anyhow::anyhow!("the server answered {status}"),
+        }
+    }
+}
+
+impl fmt::Display for FetchFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Transport(error) => write!(formatter, "{error}"),
+            Self::Read(error) => write!(formatter, "{error}"),
+            Self::Truncated { received, expected } => {
+                write!(formatter, "truncated after {received} of {expected} bytes")
+            }
+            Self::Unexpected(message) => write!(formatter, "{message}"),
+            Self::Status(status) => write!(formatter, "status {status}"),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        net::{SocketAddr, TcpListener, TcpStream},
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        thread,
+        time::Duration,
+    };
+
+    use std::io::Write as _;
+
     use super::*;
 
     // ==================== Release URL 解析测试 ====================
@@ -611,5 +949,271 @@ mod tests {
                 assert!(final_url.starts_with("https://template.com"));
             },
         );
+    }
+
+    // ==================== 断点续传测试 ====================
+
+    /// A one-file HTTP server, so the resume logic is exercised against a real
+    /// socket instead of a mock.
+    struct TestServer {
+        address: SocketAddr,
+        requests: Arc<AtomicUsize>,
+        _handle: thread::JoinHandle<()>,
+    }
+
+    /// How [`TestServer`] answers a request.
+    #[derive(Debug, Clone, Copy)]
+    enum Behavior {
+        /// Honours `Range` and always sends the whole requested span.
+        Complete,
+        /// The first response stops after `bytes`; later ones honour `Range`.
+        TruncateFirstOnce { bytes: usize },
+        /// Like [`Behavior::TruncateFirstOnce`], but later responses ignore
+        /// `Range` and start from the beginning again.
+        TruncateFirstOnceIgnoringRange { bytes: usize },
+        /// Every response stops after `bytes`, honouring `Range`, so each
+        /// attempt makes a little progress.
+        AlwaysTruncate { bytes: usize },
+        /// Every response carries this status code.
+        Status(u16),
+    }
+
+    impl TestServer {
+        /// Serves `body` to at most `max_requests` connections.
+        fn start(body: Vec<u8>, behavior: Behavior, max_requests: usize) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
+            let address = listener.local_addr().expect("read back the port");
+            let requests = Arc::new(AtomicUsize::new(0));
+            let counter = Arc::clone(&requests);
+
+            let handle = thread::spawn(move || {
+                for _ in 0..max_requests {
+                    let Ok((mut stream, _)) = listener.accept() else {
+                        return;
+                    };
+                    let request_index = counter.fetch_add(1, Ordering::SeqCst) + 1;
+
+                    let mut head = Vec::new();
+                    let mut byte = [0u8; 1];
+                    while !head.ends_with(b"\r\n\r\n") {
+                        match stream.read(&mut byte) {
+                            Ok(1) => head.push(byte[0]),
+                            _ => break,
+                        }
+                    }
+
+                    respond(
+                        &mut stream,
+                        &body,
+                        behavior,
+                        request_index,
+                        parse_request_range(&String::from_utf8_lossy(&head)),
+                    );
+                }
+            });
+
+            Self {
+                address,
+                requests,
+                _handle: handle,
+            }
+        }
+
+        fn url(&self) -> String {
+            format!("http://{}/file.bin", self.address)
+        }
+
+        fn requests(&self) -> usize {
+            self.requests.load(Ordering::SeqCst)
+        }
+    }
+
+    /// The offset a `Range: bytes=<start>-` request asks for.
+    fn parse_request_range(head: &str) -> usize {
+        head.lines()
+            .map(str::to_ascii_lowercase)
+            .find_map(|line| {
+                line.strip_prefix("range: bytes=")
+                    .and_then(|value| value.split('-').next())
+                    .and_then(|start| start.trim().parse().ok())
+            })
+            .unwrap_or(0)
+    }
+
+    /// Answers one request, declaring the full length even when it then stops
+    /// early — which is exactly what a dropped transfer looks like.
+    fn respond(
+        stream: &mut TcpStream,
+        body: &[u8],
+        behavior: Behavior,
+        request_index: usize,
+        requested_start: usize,
+    ) {
+        if let Behavior::Status(code) = behavior {
+            let response =
+                format!("HTTP/1.1 {code} Nope\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+            return;
+        }
+
+        let honours_range = !matches!(behavior, Behavior::TruncateFirstOnceIgnoringRange { .. });
+        let start = if honours_range {
+            requested_start.min(body.len())
+        } else {
+            0
+        };
+        let slice = &body[start..];
+
+        let truncate_after = match behavior {
+            Behavior::TruncateFirstOnce { bytes } if request_index == 1 => Some(bytes),
+            Behavior::TruncateFirstOnceIgnoringRange { bytes } if request_index == 1 => Some(bytes),
+            Behavior::AlwaysTruncate { bytes } => Some(bytes),
+            _ => None,
+        };
+
+        let mut response = if start == 0 {
+            format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n", body.len())
+        } else {
+            format!(
+                "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\n",
+                slice.len(),
+                start,
+                body.len() - 1,
+                body.len()
+            )
+        };
+        response.push_str("Connection: close\r\n\r\n");
+
+        let _ = stream.write_all(response.as_bytes());
+        let to_send = truncate_after.map_or(slice.len(), |limit| limit.min(slice.len()));
+        let _ = stream.write_all(&slice[..to_send]);
+        let _ = stream.flush();
+        // Dropping the stream closes the connection, which is the failure the
+        // resume logic is there to survive.
+    }
+
+    /// The client used by the tests: no proxy, no mirror, no retry delay.
+    fn test_agent() -> Agent {
+        create_base_agent_builder().build().into()
+    }
+
+    fn test_policy(attempts: u32) -> RetryPolicy {
+        RetryPolicy {
+            attempts,
+            delay: Duration::ZERO,
+        }
+    }
+
+    fn body_of(len: usize) -> Vec<u8> {
+        (0..len).map(|index| (index % 251) as u8).collect()
+    }
+
+    #[test]
+    fn a_dropped_transfer_resumes_from_where_it_stopped() {
+        let body = body_of(300_000);
+        let server = TestServer::start(
+            body.clone(),
+            Behavior::TruncateFirstOnce { bytes: 100_000 },
+            4,
+        );
+
+        let downloaded = download_with_resume(&test_agent(), &server.url(), test_policy(3))
+            .expect("the second attempt must finish the file");
+
+        assert_eq!(downloaded.len(), body.len());
+        assert_eq!(downloaded, body, "the resumed bytes must line up");
+        assert_eq!(
+            server.requests(),
+            2,
+            "the download should have resumed instead of restarting"
+        );
+    }
+
+    /// A server that ignores `Range` cannot be resumed against, so the retry has
+    /// to start over — and still end up with the right bytes.
+    #[test]
+    fn a_server_that_ignores_range_still_yields_the_file() {
+        let body = body_of(120_000);
+        let server = TestServer::start(
+            body.clone(),
+            Behavior::TruncateFirstOnceIgnoringRange { bytes: 40_000 },
+            4,
+        );
+
+        let downloaded = download_with_resume(&test_agent(), &server.url(), test_policy(3))
+            .expect("the second attempt must finish the file");
+
+        assert_eq!(downloaded, body);
+    }
+
+    #[test]
+    fn attempts_that_never_finish_report_how_far_they_got() {
+        let body = body_of(50_000);
+        let server = TestServer::start(body, Behavior::AlwaysTruncate { bytes: 1_000 }, 5);
+
+        let error = download_with_resume(&test_agent(), &server.url(), test_policy(3))
+            .expect_err("three truncated attempts cannot complete the file")
+            .to_string();
+
+        assert!(
+            error.contains("3000") && error.contains("50000"),
+            "the error should say how much arrived: {error}"
+        );
+        assert_eq!(server.requests(), 3, "every attempt should have been made");
+    }
+
+    /// A 404 is not worth another attempt, and retrying it would only make a
+    /// wrong URL slower to report.
+    #[test]
+    fn a_client_error_is_not_retried() {
+        let server = TestServer::start(body_of(10), Behavior::Status(404), 4);
+
+        let error = download_with_resume(&test_agent(), &server.url(), test_policy(3))
+            .expect_err("a 404 must fail")
+            .to_string();
+
+        assert!(error.contains("404"), "{error}");
+        assert_eq!(server.requests(), 1, "a 404 must not be retried");
+    }
+
+    #[test]
+    fn a_complete_transfer_takes_a_single_request() {
+        let body = body_of(64_000);
+        let server = TestServer::start(body.clone(), Behavior::Complete, 2);
+
+        let downloaded = download_with_resume(&test_agent(), &server.url(), test_policy(3))
+            .expect("the file must arrive");
+
+        assert_eq!(downloaded, body);
+        assert_eq!(server.requests(), 1);
+    }
+
+    #[test]
+    fn content_range_headers_are_parsed() {
+        assert_eq!(
+            parse_content_range("bytes 100-499/1234"),
+            Some(ContentRange {
+                start: Some(100),
+                total: Some(1234)
+            })
+        );
+        assert_eq!(
+            parse_content_range(" bytes 0-0/* "),
+            Some(ContentRange {
+                start: Some(0),
+                total: None
+            })
+        );
+        assert_eq!(
+            parse_content_range("bytes */1234"),
+            Some(ContentRange {
+                start: None,
+                total: Some(1234)
+            })
+        );
+        assert_eq!(parse_content_range("items 0-1/2"), None);
+        assert_eq!(parse_content_range("bytes 0-1"), None);
+        assert_eq!(parse_content_range(""), None);
     }
 }

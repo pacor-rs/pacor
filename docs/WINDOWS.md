@@ -292,8 +292,9 @@ $env:PACOR_GITHUB_MIRROR_BASE_URL = "https://gh.my-website.ccwu.cc"
 两点实测经验（详见 [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md#镜像选型要注意的两件事实测)）：
 
 - 模板文件只有几 KB，任何能连通的镜像都够用；NSIS 发行版约 2 MB，冷启动整条链路实测 1 分钟内完成；
-- **WiX 工具链约 39 MB，是对镜像的考验**：镜像带宽不足或中途断流时下载会失败，而 pacor 的下载
-  没有重试/续传，只能重来。这类网络下更省事的是离线预置（见下）。
+- **WiX 工具链约 39 MB，是对镜像的考验**：镜像带宽不足或中途断流时下载会中断；pacor 会把已收到的
+  字节保留下来并在下一次尝试时断点续传（最多 4 次），因此单次断流不再让构建失败。真正不行的是
+  完全无法交付该文件的镜像，这类网络下更省事的是离线预置（见下）。
 
 也可以离线预置：把 NSIS 发行版与模板按上面的布局放进
 `%APPDATA%\pacor\windows\nsis\<模板 tag>\`，并创建一个空的 `.extracted` 标记文件；

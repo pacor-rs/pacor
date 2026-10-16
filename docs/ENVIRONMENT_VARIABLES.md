@@ -183,12 +183,15 @@ export PACOR_GITHUB_RAW_MIRROR_TEMPLATE="https://cdn.jsdelivr.net/gh/<owner>/<re
   经镜像下载后大小与 tag 中的 blob 完全一致；NSIS 冷启动（下载发行版 + 模板 + 编译 + 打包）
   60 秒内完成。
 - **大文件（WiX 工具链约 39 MB）是对镜像的考验**：实测 `ghproxy.net` 在约 75 KB/s 的速度下
-  传输该 zip 时会被断开（`Peer disconnected`），pacor 的下载没有重试/续传，因此整个下载要重来；
+  传输该 zip 时会被断开（`Peer disconnected`）。pacor 会**保留已收到的字节并断点续传**（最多 4 次
+  尝试，续传时发 `Range: bytes=<已收字节>-`），并每 8 MB 打印一次进度；实测被砍在 3 MB 后，
+  第二次尝试从 3 MB 继续，38 秒内完成整个 MSI 构建。镜像若连 `Range` 都不支持，重试会退化为
+  重新下载，至少不会因为一次断流而失败。
   `https://gh.my-website.ccwu.cc` 在本机需要经代理才能访问（直接访问时 TLS 握手即被重置），
   经代理后一切正常，但此时**直接用代理而不设镜像**更简单也更快（见上一节）。
 
-因此：**选一个能稳定交付 39 MB 的镜像**；如果镜像的带宽有限或会断流，首次 MSI 构建会反复失败，
-此时按 [WINDOWS.md](WINDOWS.md) 的方式离线预置 WiX 工具链更省事（NSIS 的 2 MB 发行版不受影响）。
+因此：镜像的带宽和稳定性仍然重要（每次断流都要重来一段），但单次断流已经不再让构建失败；
+如果镜像完全不可用或速度无法接受，按 [WINDOWS.md](WINDOWS.md) 的方式离线预置 WiX 工具链。
 
 ### 2. 企业环境
 
