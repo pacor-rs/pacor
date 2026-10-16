@@ -191,9 +191,14 @@ written against, and every backend derives its download URLs from it.
 
 That keeps the templates and the code that renders them in lockstep — a template
 change cannot reach a pacor build that does not understand it. It also means the
-tag is part of each cache path (`<tools>/deb/v1`, `<tools>/icons/v1`, …), so
+tag is part of each cache path (`<tools>/deb/1.1`, `<tools>/icons/1.1`, …), so
 bumping the tag is all it takes to invalidate stale copies; tag contents are
 immutable, so nothing else is required.
+
+Tags are GNU-style version numbers (`MAJOR.MINOR`, optionally with a patch level)
+rather than the `v`-prefixed form: a backward-compatible template addition is a
+minor bump, an incompatible one a major bump. `v1` predates the convention and
+holds the tree that `1.0` would name.
 
 When a template change is needed:
 

@@ -24,8 +24,14 @@ pub const TOOLS_REPOSITORY: &str = "pacor-rs/tools";
 /// installations that already cached the previous tag. The tag message in the
 /// repository documents the contract it describes.
 ///
+/// Tags are GNU-style version numbers (`MAJOR.MINOR`, optionally with a patch
+/// level) without a `v` prefix: a backward-compatible template addition is a
+/// minor bump, an incompatible one a major bump. `v1` predates that convention
+/// and holds the tree that `1.0` would name; `1.1` adds the WiX templates the
+/// MSI backend renders.
+///
 /// See <https://github.com/pacor-rs/tools> for the released tags.
-pub const TEMPLATE_REF: &str = "v1";
+pub const TEMPLATE_REF: &str = "1.1";
 
 /// Raw URL of `path` inside the pinned tag, e.g. `linux/deb/template.cc`.
 ///
@@ -66,11 +72,37 @@ mod tests {
     fn urls_are_pinned_to_the_tag_and_never_a_branch() {
         let url = template_url("linux/deb/my_application_template.cc");
 
-        assert!(url.contains("/refs/tags/v1/"), "{url}");
+        assert!(
+            url.contains(&format!("/refs/tags/{TEMPLATE_REF}/")),
+            "{url}"
+        );
         assert!(
             !url.contains("/refs/heads/"),
             "a branch URL would let a template change reach an incompatible \
              pacor build: {url}"
+        );
+    }
+
+    /// Tags are GNU-style version numbers, without the `v` prefix git users
+    /// often add, so a tag cannot be confused with a branch name.
+    #[test]
+    fn the_tag_is_a_gnu_style_version_number() {
+        let (major, minor) = TEMPLATE_REF
+            .split_once('.')
+            .expect("the tag needs at least MAJOR.MINOR");
+
+        assert!(!TEMPLATE_REF.starts_with('v'), "{TEMPLATE_REF}");
+        assert!(
+            major.parse::<u32>().is_ok(),
+            "the major version must be numeric: {TEMPLATE_REF}"
+        );
+        assert!(
+            minor.split('.').all(|part| part.parse::<u32>().is_ok()),
+            "every component must be numeric: {TEMPLATE_REF}"
+        );
+        assert!(
+            !TEMPLATE_REF.contains('/') && !TEMPLATE_REF.contains(' '),
+            "{TEMPLATE_REF}"
         );
     }
 

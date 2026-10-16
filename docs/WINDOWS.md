@@ -108,7 +108,7 @@ Flutter 生成的可执行文件名来自 `windows/CMakeLists.txt` 中的 `BINAR
 模板），pacor 会给出警告并改用自身缓存，而不会构建失败。
 
 缓存位于 `<用户配置目录>/pacor/windows/nsis/<模板 tag>`，在 Windows 上即
-`%APPDATA%\pacor\windows\nsis\v1\`。该目录同时保存 NSIS 发行版与固定 tag 的模板：
+`%APPDATA%\pacor\windows\nsis\1.1\`。该目录同时保存 NSIS 发行版与固定 tag 的模板：
 
 ```
 makensis.exe                  # NSIS 发行版（必要时下载）
@@ -120,11 +120,11 @@ languages/<NSIS 语言>.nsh     # 各语言的 SECTION_*/DESC_*/MSG_* 字符串
 
 模板与渲染它们的代码一起版本化，tag 固定在
 [`crates/pacor-core/src/tools.rs`](../crates/pacor-core/src/tools.rs) 的 `TEMPLATE_REF`
-（当前为 `v1`，仓库为 [pacor-rs/tools](https://github.com/pacor-rs/tools)）。
+（GNU 风格版本号，当前为 `1.1`；仓库为 [pacor-rs/tools](https://github.com/pacor-rs/tools)）。
 `pacor cache clean` 会删除整个缓存，下次构建重新下载。
 
 使用缓存中的 NSIS 时，该目录就是 `$NSISDIR`，插件会被安装到
-`%APPDATA%\pacor\windows\nsis\v1\Plugins\x86-unicode\nsProcess.dll`；
+`%APPDATA%\pacor\windows\nsis\<模板 tag>\Plugins\x86-unicode\nsProcess.dll`；
 使用系统级 NSIS 时，插件则被安装到该系统安装的对应目录。
 
 ### 编译安装包时的三处关键位置
@@ -162,7 +162,7 @@ pacor 会做归一化：`1.0.0+1` → `1.0.0.1`，`1.0.0` → `1.0.0.0`，
 
 ## 安装与卸载（实测行为）
 
-以下行为由真实的 `flutter create` 示例项目实际安装/卸载验证过（对应固定模板 `v1`）：
+以下行为由真实的 `flutter create` 示例项目实际安装/卸载验证过（对应固定模板 `1.1`）：
 
 - 安装到 `%LOCALAPPDATA%\<name>`，并创建本地化快捷方式：桌面
   `$(APP_DISPLAY_NAME).lnk`、开始菜单文件夹 `<name>\`（含应用与卸载两个快捷方式）；
@@ -177,7 +177,7 @@ pacor 会做归一化：`1.0.0+1` → `1.0.0.1`，`1.0.0` → `1.0.0.0`，
   因此启动的进程约 2 秒后即返回，真正的删除在后台继续（实测数十秒）；
 - 卸载后可能残留一个只含 `InstallDir`、`Version` 两个值的 `HKCU\Software\<name>`：
   模板用 `DeleteRegKey /ifempty` 清理它，而键内仍有值，因此不会被删除。
-  这是固定模板 `v1` 的行为，可手工删除该键。
+  这是固定模板 `1.1` 的行为，可手工删除该键。
 
 ## 清理
 
@@ -224,7 +224,7 @@ pacor 固定的下载地址位于 `github.com` 与 `raw.githubusercontent.com`�
   `PACOR_GITHUB_MIRROR_BASE_URL`。
 
 也可以离线预置：把 NSIS 发行版与模板按上面的布局放进
-`%APPDATA%\pacor\windows\nsis\v1\`，并创建一个空的 `.extracted` 标记文件；
+`%APPDATA%\pacor\windows\nsis\<模板 tag>\`，并创建一个空的 `.extracted` 标记文件；
 已存在的模板文件本来就会被跳过，NSIS 则因该标记而不再下载。
 
 ## 开发验证

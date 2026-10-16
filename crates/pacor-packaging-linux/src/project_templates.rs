@@ -598,7 +598,7 @@ mod tests {
         let url = template_url("deb", "my_application_template.cc");
 
         assert!(
-            url.contains("/refs/tags/v1/"),
+            url.contains(&format!("/refs/tags/{TEMPLATE_REF}/")),
             "a branch URL would let a template change reach an incompatible \
              pacor build: {url}"
         );

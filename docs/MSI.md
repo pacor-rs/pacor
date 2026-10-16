@@ -57,18 +57,19 @@ GPO / Intune / SCCM 部署，并让安装过程可完全脚本化：
 
 `pacor cache clean` 一并清除。
 
-## 4. 模板契约：需要新的 tag（v2）
+## 4. 模板契约：需要新的 tag（1.1）
 
-模板 tag 不可变，MSI 需要新增模板文件，因此**必须发 v2**：
+模板 tag 不可变（且采用 GNU 风格版本号，见 [README](../README.md#build-templates)），MSI 需要
+新增模板文件，因此**必须发 `1.1`**：
 
 ```
 windows/wix/main.wxs           # 产品、界面、升级、快捷方式、ARP，含 {{占位符}}
 windows/wix/culture.wxl.tmpl   # 每种语言渲染一份 <culture>.wxl
 ```
 
-v2 内容 = v1 的 `windows/nsis/**` **原样保留** + 上述新增。`TEMPLATE_REF` 从 `v1` 提到 `v2`
-后，缓存路径变化会同时失效旧的 NSIS 缓存并重新下载——这正是设计意图（一个 pacor 版本只认
-一个模板契约）。
+`1.1` 内容 = `1.0`（即历史上的 `v1`）的 `windows/nsis/**` **原样保留** + 上述新增。
+`TEMPLATE_REF` 从 `v1` 提到 `1.1` 后，缓存路径变化会同时失效旧的 NSIS 缓存并重新下载——
+这正是设计意图（一个 pacor 版本只认一个模板契约）。
 
 占位符（沿用 `render_template`，未替换即构建失败）：
 
