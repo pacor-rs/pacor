@@ -17,10 +17,10 @@ Flutter 构建产物打包成安装包：
 | 目标平台  | 产物                                                         | 状态        |
 | --------- | ------------------------------------------------------------ | ----------- |
 | macOS     | `.dmg`（可选签名与公证）+ 自动更新 `.tar.gz`                  | 已实现      |
-| Windows   | NSIS 安装包 + 便携版 `.zip`                                   | 已实现      |
+| Windows   | NSIS 安装包或全机 MSI，以及便携版 `.zip`                      | 已实现      |
 | Linux     | AppImage 和/或 `.deb`                                         | 已实现      |
 | Android   | 按 ABI 拆分的 `.apk`                                          | 已实现      |
-| —         | MSI、RPM                                                      | 尚未实现    |
+| —         | RPM                                                           | 尚未实现    |
 
 > 项目处于前期阶段，功能和配置仍可能变化。
 
@@ -145,7 +145,10 @@ dist/MyApp-1.0.0+1-x64-portable.zip
 下载到 `%APPDATA%\pacor\windows\nsis\<模板 tag>`，与它渲染的模板放在一起。
 产物细节、签名选项、缓存布局与由此可解释的报错见 [docs/WINDOWS.md](docs/WINDOWS.md)。
 
-MSI 安装包尚未实现，其设计方案（选型、模板契约与实测结论）见 [docs/MSI.md](docs/MSI.md)。
+`installer_format` 在两者之间选择：`nsis` 为当前用户安装（位于 `%LOCALAPPDATA%`，无需管理员
+权限），`msi` 为全机安装（位于 `%ProgramFiles%`，需要管理员权限），并为每个配置的语言各产出
+一个包——`light` 无法合并定义了相同标识符的本地化文件。工具链、模板契约与实现所遵循的约束见
+[docs/MSI.md](docs/MSI.md)。
 
 ## 项目结构
 

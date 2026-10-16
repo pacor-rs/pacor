@@ -17,10 +17,10 @@ your Flutter build output into an installer for the target you choose:
 | Target    | Output                                                  | Status        |
 | --------- | ------------------------------------------------------- | ------------- |
 | macOS     | `.dmg` (optional codesign + notarization) + updater `.tar.gz` | implemented   |
-| Windows   | NSIS installer + portable `.zip`                        | implemented   |
+| Windows   | NSIS installer or per-machine MSI, plus a portable `.zip` | implemented   |
 | Linux     | AppImage and/or `.deb`                                  | implemented   |
 | Android   | per-ABI `.apk`                                          | implemented   |
-| —         | MSI, RPM                                                | not yet       |
+| —         | RPM                                                     | not yet       |
 
 > Early-stage project: features and configuration may still change.
 
@@ -153,11 +153,15 @@ then `PATH`, then the installed Windows SDKs.
 `makensis` from `PATH` is used when its plugin directory is writable; otherwise
 pacor downloads a pinned NSIS build into
 `%APPDATA%\pacor\windows\nsis\<template tag>` alongside the templates it renders.
+`installer_format` picks between them: `nsis` installs per user (below
+`%LOCALAPPDATA%`, no administrator rights), `msi` installs per machine (below
+`%ProgramFiles%`, needs them) and produces one package per configured locale,
+because `light` cannot merge localizations that define the same identifiers.
+[`docs/MSI.md`](docs/MSI.md) records the toolchain, the template contract and the
+constraints the implementation is built around.
+
 [`docs/WINDOWS.md`](docs/WINDOWS.md) documents the artifacts, the signing
 options, the cache layout and the failures that layout explains.
-
-MSI packages are not implemented yet; the design — toolchain, template contract
-and the spike findings behind them — is in [`docs/MSI.md`](docs/MSI.md).
 
 ## Project layout
 

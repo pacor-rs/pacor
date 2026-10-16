@@ -1,7 +1,8 @@
 # Pacor MSI 安装器设计方案
 
-> 状态：**设计文档，尚未实现**。`installer_format = "msi"` 目前会在构建时报
-> 「not implemented」。本文档记录选型、契约、实测结论与落地步骤。
+> 状态：**已实现**（M1 完成）。`installer_format = "msi"` 会为每个 `[app.i18n]`
+> 语言产出一个全机安装的 MSI。本文档记录选型、契约、实测结论与后续计划，
+> 使用说明见 [WINDOWS.md](WINDOWS.md#msi-安装包)。
 >
 > 适用范围：**仅 per-machine（全机安装）**。按项目决定，**不实现 per-user 安装**——
 > 这同时消掉了 per-user 才需要的一大堆 MSI 约束（见 7.5）。
@@ -71,29 +72,38 @@ windows/wix/culture.wxl.tmpl   # 每种语言渲染一份 <culture>.wxl
 `TEMPLATE_REF` 从 `v1` 提到 `1.1` 后，缓存路径变化会同时失效旧的 NSIS 缓存并重新下载——
 这正是设计意图（一个 pacor 版本只认一个模板契约）。
 
+两份模板的权威副本同时放在本仓库的 `tools/windows/wix/` 下，发 `1.1` 时把它们并入
+`pacor-rs/tools` 即可（与 `tools/macos/` 的存放方式一致）。
+
 占位符（沿用 `render_template`，未替换即构建失败）：
 
-`main.wxs`：
+`main.wxs`（**每个语言渲染一份**，因为 `Product/@Language` 无法本地化）：
 
 | 占位符 | 来源 |
 | ------ | ---- |
 | `{{APP_NAME}}` | `pubspec.yaml` 项目名（安装目录名、注册表键） |
-| `{{APP_VERSION}}` | 归一化后的四段数字版本（见 5.2） |
+| `{{PRODUCT_VERSION}}` | 归一化后的四段数字版本（见 5.2） |
+| `{{PRODUCT_LANGUAGE}}` | `Locale::as_windows_lcid()`，如 `2052` |
 | `{{APP_EXECUTABLE}}` | 运行器可执行文件名（复用 `runner.rs`） |
+| `{{APP_URL}}` | `[app].url` |
 | `{{APP_ICON_PATH}}` | `windows/runner/resources/app_icon.ico` |
 | `{{UPGRADE_CODE}}` | `msi_upgrade_code` 或按 5.3 推导 |
-| `{{SOURCE_DIR}}` | 构建输出目录，经 `candle -dSourceDir=` 传入 |
-| `{{INSTALLER_OUTPUT_PATH}}` | 产物绝对路径 |
-| `{{PAYLOAD_COMPONENT_GROUP}}` | harvester 生成的组件组 Id |
+| `{{INSTALL_DIR_COMPONENT_GUID}}` `{{START_MENU_COMPONENT_GUID}}` `{{DESKTOP_COMPONENT_GUID}}` | 模板自身组件的 UUIDv5（以 UpgradeCode 为前缀） |
+| `{{PAYLOAD_COMPONENT_GROUP}}` | harvester 定义的组件组 Id（`AppPayload`） |
+
+构建输出目录不经过占位符：它由 `candle -dSourceDir=` 传入，生成的 `payload.wxs` 里用
+`$(var.SourceDir)\…` 引用，因此生成物不含机器相关路径（见 7.1）。
 
 `culture.wxl`（每种语言渲染一份，承载所有面向用户的文案）：
 
 | 占位符 | 来源 |
 | ------ | ---- |
 | `{{CULTURE}}` | `Locale::as_wix_culture()`，如 `zh-cn` |
+| `{{MSI_CODEPAGE}}` | `msi_codepage` 或 `Locale::as_msi_codepage()`（见 5.4） |
 | `{{APP_DISPLAY_NAME}}` `{{APP_PUBLISHER}}` `{{APP_DESCRIPTION}}` `{{APP_COPYRIGHT}}` | 该语言的 `[app.i18n.<locale>]`，缺失时回退到默认语言 |
-| `{{APP_URL}}` | `[app].url` |
-| `{{FEATURE_MAIN}}` `{{UNINSTALL_SHORTCUT}}` `{{DOWNGRADE_ERROR}}` | pacor 内置文案（`main.wxs` 里以 `!(loc.…)` 引用） |
+| `{{FEATURE_MAIN}}` `{{UNINSTALL_SHORTCUT}}` `{{DOWNGRADE_ERROR}}` | pacor 内置文案（`msi/generator.rs` 的小表，`main.wxs` 里以 `!(loc.…)` 引用） |
+
+WixUI 自己的界面文案（Welcome、Next 等）由扩展按 `-cultures:` 提供，不在模板里。
 
 ### 4.1 多语言：每种语言一个 MSI
 
@@ -110,8 +120,9 @@ windows/wix/culture.wxl.tmpl   # 每种语言渲染一份 <culture>.wxl
 
 ```toml
 [platforms.windows]
-installer_format = "msi"       # 现有字段，取值 nsis | msi
+installer_format = "msi"       # nsis | msi
 # msi_upgrade_code = "..."     # 可选；缺省自动推导
+# msi_codepage = 65001         # 可选；缺省用 locale 自己的代码页
 ```
 
 ### 5.1 不加 `install_scope`
@@ -137,9 +148,32 @@ per-user。避免了一个只能对一种格式生效的开关。
 uuid_v5(NAMESPACE, "pacor:windows:msi:<name>:<publisher>")
 ```
 
-`sha1` 已是 `pacor-core` 的依赖，UUIDv5 不需要新依赖；实现需按 RFC 4122 的字节序，并用
+`sha1` 已是 `pacor-core` 的依赖，UUIDv5 不需要新依赖；实现按 RFC 4122 的字节序，并用
 RFC 的 DNS 向量做单测（`python.org` → `886313e1-3b8a-5372-9b90-0c9aee199e5d`）。改名或改
 发布者会改变 UpgradeCode，文档中说明，并可用 `msi_upgrade_code` 钉住。
+
+### 5.4 `msi_codepage`：字符串代码页
+
+Windows Installer 一个包里只能用**一个**代码页存放所有字符串，WiX 默认从 culture 推导。
+pacor 显式写入，因为这是 `LGHT0311` 的解释项，也是出口：
+
+| locale | 代码页 |
+| ------ | ------ |
+| `en-US` `en-GB` | 1252（Windows-1252） |
+| `zh-CN` | 936（GBK） |
+| `zh-TW` | 950（Big5） |
+| `ja-JP` | 932（Shift-JIS） |
+
+实测 `©`（U+00A9）不在 CP936 中（CP950 也只会把它降级成 `c`），因此一个带
+`版权所有 © 2025 …` 的 zh-CN 包会以
+`LGHT0311: A string was provided with characters that are not available in the specified
+database code page '936'` 失败。处理方式有两种：
+
+1. 改写文案（`版权所有 (C) 2025 …`）——推荐，因为 MSI 的代码页处理本身就不适合承载
+   任意 Unicode；
+2. `msi_codepage = 65001` 改用 UTF-8。实测可行：包能通过 ICE 校验，`msiexec /a` 正常解包，
+   中文 `ProductName` 也能正确回读。代码页写在 `WixLocalization/@Codepage` 上而不是
+   `Product` 上，因为 `main.wxs` 被多种语言共用，而 `.wxl` 本来就是每个语言一份。
 
 ## 6. 打包流水线
 
@@ -147,34 +181,43 @@ RFC 的 DNS 向量做单测（`python.org` → `886313e1-3b8a-5372-9b90-0c9aee19
 flutter build windows --<mode>
   → 定位可执行文件（复用 runner.rs）
   → 签名主程序（NSIS 也要求如此：MSI 会把文件内容嵌进 CAB）
-  → harvest(构建输出)            → payload.wxs
-  → 渲染 main.wxs + <locale>.wxl → 每种语言一份
-  → candle -arch x64 main.wxs payload.wxs
-  → light -ext WixUIExtension -cultures:<locale> -loc <locale>.wxl
-          -sice:ICE60 -sice:ICE61
+  → harvest(构建输出)                     → payload.wxs
+  → 每个语言渲染 main.wxs（带 LCID）+ <culture>.wxl
+  → candle -arch x64 payload.wxs          → payload.wixobj（各语言共用）
+  → 每个语言 candle main.wxs              → <culture>-main.wixobj
+  → 每个语言 light -ext WixUIExtension -cultures:<locale> -loc <culture>.wxl
+          -sice:ICE60 -sice:ICE61 -pdbout <临时目录>
   → 校验 light 退出码为 0（ICE 错误视为失败，见 8.1）
   → 签名 MSI → 写 .sha1
 ```
+
+`light` 默认会在产物旁写一个 `.wixpdb` 绑定数据库，用 `-pdbout` 把它放进临时目录，
+否则它会被当成用户可见的产物（`dist/` 里多出无用的文件）。
+
+签名不在 `MsiBuilder` 里做：`lib.rs` 先把安装器都构建出来，再统一签名并重新生成校验和
+（签名会改写文件，NSIS 与 MSI 走同一条路径）。
 
 代码结构与 `nsis/` 对称：
 
 ```
 crates/pacor-packaging-windows/src/
 ├── msi/
-│   ├── mod.rs        MsiBuilder：工具链解析、调度、产物与校验和
-│   ├── toolchain.rs  固定 wix314-binaries.zip → 缓存；复用 NSIS 的下载/镜像/缓存逻辑
+│   ├── mod.rs        MsiBuilder：工具链准备、candle/light 调度、产物与校验和
+│   ├── toolchain.rs  固定 wix314-binaries.zip + 模板 → 缓存
 │   ├── harvest.rs    构建输出 → 目录树 + 每文件一组件（纯函数，重点单测）
-│   └── generator.rs  main.wxs / culture.wxl 渲染
+│   └── generator.rs  main.wxs / culture.wxl 渲染 + 内置 UI 文案
 pacor-core:
     packaging::windows_version()、deterministic_uuid_v5()
-    i18n::Locale::as_wix_culture()
+    i18n::Locale::as_wix_culture()、as_windows_lcid()、as_msi_codepage()
+    config::WindowsConfig::resolved_upgrade_code()、resolved_msi_codepage()
 ```
 
-模板骨架（已在 spike 中按此形状验证通过）：
+模板骨架（与 `tools/windows/wix/main.wxs` 一致，此处省略 `!(loc.…)` 的绑定细节）：
 
 ```xml
-<Product Id="*" Name="!(loc.ProductName)" Version="{{APP_VERSION}}"
-         Manufacturer="!(loc.Manufacturer)" UpgradeCode="{{UPGRADE_CODE}}" Language="1033">
+<Product Id="*" Name="!(loc.ProductName)" Language="{{PRODUCT_LANGUAGE}}"
+         Version="{{PRODUCT_VERSION}}" Manufacturer="!(loc.Manufacturer)"
+         UpgradeCode="{{UPGRADE_CODE}}">
   <Package InstallerVersion="500" Compressed="yes" Platform="x64"
            InstallScope="perMachine" InstallPrivileges="elevated" />
   <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="!(loc.DowngradeError)" />
@@ -182,12 +225,13 @@ pacor-core:
   <Icon Id="AppIcon.ico" SourceFile="{{APP_ICON_PATH}}" />
   <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
   <Property Id="ARPURLINFOABOUT" Value="{{APP_URL}}" />
+  <Property Id="ARPCOMMENTS" Value="!(loc.LegalCopyright)" />
   <UIRef Id="WixUI_InstallDir" />
   <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
   <Directory Id="TARGETDIR" Name="SourceDir">
     <Directory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLDIR" Name="{{APP_NAME}}">
-        <Component Id="cmp_INSTALLDIR" Guid="…">
+        <Component Id="cmp_INSTALLDIR" Guid="{{INSTALL_DIR_COMPONENT_GUID}}">
           <RemoveFolder Id="RemoveINSTALLDIR" On="uninstall" />
           <RegistryValue Root="HKLM" Key="Software\{{APP_NAME}}" Name="InstallDir"
                          Type="string" Value="[INSTALLDIR]" KeyPath="yes" />
@@ -282,34 +326,43 @@ per-user 安装会额外引入两条硬约束，**本方案因只做 per-machine
 
 ### 8.2 单元测试
 
-版本归一化、UUIDv5（RFC 向量）、标识符合法化/截断/去重、目录树与组件生成、占位符完整性、
-`as_wix_culture`、UpgradeCode 推导的稳定性。
+已覆盖：版本归一化与截断、UUIDv5（含 RFC 4122 向量与稳定性）、标识符合法化/截断/去重、
+目录树与组件生成（含「每个组件都被 feature 引用」）、XML 转义、空目录告警、
+占位符渲染与转义、`as_wix_culture`/`as_windows_lcid`/`as_msi_codepage`、UpgradeCode 推导、
+代码页解析、ICE 白名单与缓存路径。
 
 ### 8.3 端到端（opt-in，沿用 NSIS 的模式）
 
-`PACOR_MSI_TOOLCHAIN_DIR` 指向准备好的 WiX 目录（见附录）：
+`PACOR_MSI_TOOLCHAIN_DIR` 指向准备好的 WiX 目录（见附录），
+`an_msi_is_built_end_to_end` 用一份合成载荷构建两个语言的 MSI 并检查：
 
-1. `light` 退出码 0 且 ICE 为 0；
-2. `msiexec /a <msi> /qn TARGETDIR=<tmp>` 行政安装解包 → 与构建输出**逐文件比对**
-   （实测 12/12 完全一致；这条不需要提权，适合 CI）；
-3. 提权会话下 `msiexec /i /qn` → 断言 `%ProgramFiles%\<name>`、`HKLM` 的 ARP 条目
+1. `light` 退出码 0 且 ICE 为 0（`light` 的退出码是唯一判据，见 8.1）；
+2. 产物名带 `<locale>`，`.sha1` 存在，且 `.wixpdb` 没有漏到输出目录；
+3. `msiexec /a <msi> /qn TARGETDIR=<tmp>` 行政安装解包 → 与构建输出**逐文件比对**
+   （这条不需要提权，适合 CI）；
+
+人工验证时还可以补：
+
+4. 提权会话下 `msiexec /i /qn` → 断言 `%ProgramFiles%\<name>`、`HKLM` 的 ARP 条目
    （注意读 **64 位**注册表视图）、所有用户桌面/开始菜单快捷方式；
-4. `msiexec /x /qn` → 断言目录、ARP、快捷方式全部清除。
+5. `msiexec /x /qn` → 断言目录、ARP、快捷方式全部清除。
 
-第 3、4 步需要管理员会话；若 CI 只有非提升权限，则至少执行第 1、2 步，并在提升环境补跑。
+第 4、5 步需要管理员会话，本机（非提升）无法执行，列为 M2.5。
 
 ## 9. 分阶段落地
 
 | 阶段 | 内容 | 状态 |
 | ---- | ---- | ---- |
 | M0 | 固定 WiX、harvester 原型、per-machine 配方、ICE 清零、`/a` 比对、权限与位数结论 | **已完成**（脚本见附录） |
-| M1 | `[platforms.windows]` 配置 + `msi/` 模块 + 模板 v2（在 `pacor-rs/tools`）+ 每语言 MSI + 签名 + `pacor check` 校验工具链 + 文档（README 双语 + `docs/WINDOWS.md` 增补） | 待做 |
-| M2 | 单元测试 + opt-in 端到端 + CI job | 待做 |
+| M1 | `[platforms.windows]` 配置 + `msi/` 模块 + 模板 `1.1` + 每语言 MSI + 签名 + `pacor check` 提示工具链 + 文档 | **已完成**（`6d56558`） |
+| M2 | 单元测试（harvester/生成器/工具链/代码页/Lcid）+ opt-in 端到端（真实 candle/light + `/a` 比对） | **已完成** |
+| M2.5 | 提升权限会话下补跑 `msiexec /i` / `/x`，确认 ARP 与快捷方式落点 | 待做（本机无法提权） |
 | M3 | 可选：`installer_formats` 集合（NSIS 与 MSI 同时产出）、语言变换单文件多语言、NSIS 版共存检测（`LaunchCondition`）、VC++ 运行时合并模块 | 待定 |
 
-## 10. 实测结论（spike 记录）
+## 10. 实测结论
 
-在示例项目 `pacor-demo`（Flutter 3.32.8，`version: 1.0.0+1`）上以 WiX 3.14.1.8722 实测：
+在示例项目 `pacor-demo`（Flutter 3.32.8，`version: 1.0.0+1`，`[app.i18n]` 为 en-US + zh-CN）
+上以 WiX 3.14.1.8722 实测：
 
 | 结论 | 证据 |
 | ---- | ---- |
@@ -321,13 +374,16 @@ per-user 安装会额外引入两条硬约束，**本方案因只做 per-machine
 | `ARPNOMODIFY` 与 WixUI 冲突 | `LGHT0091 Duplicate symbol 'Property:ARPNOMODIFY'` |
 | `ARPINSTALLLOCATION=[INSTALLDIR]` 非法 | `CNDL1077` |
 | 多语言 `-loc` 冲突 | `-cultures:en-us;zh-cn` + 两份 `.wxl` → `LGHT0100` |
-| 32 位/64 位包差异 | 默认 Intel 包 ARP 在 `WOW6432Node`；`-arch x64` 后在原生视图 |
+| 32 位/64 位包差异 | 默认 Intel 包 ARP 在 `WOW6432Node`；`-arch x64` 后在原生视图（`Template=x64;…`） |
 | light 先出产物后报 ICE | ICE 报错运行中 `msi` 仍存在，退出码 204 |
-| `/a` 解包可用于校验 | 12 个文件与构建目录逐一对齐 |
+| `/a` 解包可用于校验 | 两个语言的包各 12 个文件，与构建目录逐一对齐 |
 | per-machine 需要提权 | 非提升会话 `Error 1925`，退出码 1603，回滚干净 |
+| `light` 默认在产物旁写 `.wixpdb` | 需要 `-pdbout` 重定向，否则 `dist/` 会多出该文件 |
+| MSI 一个包只有一个字符串代码页 | zh-CN 文案含 `©` → `LGHT0311`（CP936 无 `©`） |
+| 包属性符合设计 | `UpgradeCode` 两语言一致、`ProductVersion=1.0.0.1`、`ALLUSERS=1`（即 per-machine）、`ProductLanguage` 为 1033/2052 |
 
-**未验证**（本机为非提升会话，M1 需补）：提升权限下的完整安装/卸载、ARP 条目与快捷方式的实际
-落点、`MajorUpgrade` 的升级路径（装 1.0.0.0 再装 1.0.0.1）。
+**仍未验证**（本机为非提升会话）：提升权限下的完整安装/卸载、ARP 条目与快捷方式的实际落点、
+`MajorUpgrade` 的升级路径（装 `1.0.0.0` 再装 `1.0.0.1`）。这些是 M2.5 的验收条件。
 
 ## 11. 风险与待决
 
@@ -339,6 +395,8 @@ per-user 安装会额外引入两条硬约束，**本方案因只做 per-machine
    VC++ 合并模块或 app-local 部署解决；**NSIS 路径今天同样缺这一步**，建议一并决策。
 4. **与 NSIS 版共存**：两者安装位置不同，可并存但会各有 ARP 记录；M3 的共存检测是可选缓解。
 5. **每语言一个 MSI** 会让产物数量随 `[app.i18n]` 增长；若不可接受，需在 M3 引入语言变换。
+6. **per-user 明确不做**：需要 per-user 的企业部署只能改用 NSIS 包（或另立需求重新设计，
+   代价见 7.5）。
 
 ## 附录：spike 复现
 

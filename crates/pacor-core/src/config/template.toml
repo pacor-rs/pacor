@@ -79,11 +79,13 @@ categories = [{ Main = "Utility" }]
 # changelog = "CHANGELOG.md"
 
 # ---------------------------------------------------------------------------
-# Windows: NSIS installer and/or portable ZIP
+# Windows: NSIS or MSI installer, and/or portable ZIP
 # ---------------------------------------------------------------------------
 [platforms.windows]
 enabled = true
-installer_format = "nsis"      # nsis | msi (msi not implemented yet)
+# `nsis` installs per user (no administrator rights needed), `msi` installs per
+# machine below Program Files (and therefore needs them). See docs/MSI.md.
+installer_format = "nsis"      # nsis | msi
 build_portable = true
 # Portable archives contain a single top-level directory named
 # `<name>-<version>-<arch>`, so extracting one cannot scatter the application.
@@ -94,6 +96,15 @@ build_portable = true
 # RFC 3161 timestamp server. Without one, signatures stop being valid when the
 # certificate expires; set it to "" to sign without a timestamp.
 # timestamp_url = "http://timestamp.digicert.com"
+# MSI only. `upgrade_code` decides which earlier products a package replaces and
+# is derived from the application name and publisher when left out, so it stays
+# the same across releases; pin it if the app is renamed or republished.
+# msi_upgrade_code = "{11223344-5566-7788-99AA-BBCCDDEEFF00}"
+# MSI only. Windows Installer stores every string in one code page per package;
+# the default is the locale's (936 for zh-CN, for example). Override it when a
+# localized string uses a character that code page cannot encode — a `©` in a
+# zh-CN package fails to build with LGHT0311. Rewording is usually better.
+# msi_codepage = 65001
 
 # ---------------------------------------------------------------------------
 # macOS: DMG installer (+ tar.gz updater archive)

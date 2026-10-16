@@ -4,7 +4,7 @@
 配置项的完整注释模板见 [`crates/pacor-core/src/config/template.toml`](../crates/pacor-core/src/config/template.toml)，
 GitHub 镜像相关环境变量见 [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md)。
 
-> MSI 安装包尚未实现，其设计方案（选型、模板契约、实测结论）见 [MSI.md](MSI.md)。
+> MSI 安装包（`installer_format = "msi"`，全机安装）的设计与实测结论见 [MSI.md](MSI.md)。
 
 ## 产物
 
@@ -12,7 +12,8 @@ GitHub 镜像相关环境变量见 [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIAB
 
 | 文件 | 说明 |
 | ---- | ---- |
-| `<name>-<version>-<arch>-setup.exe` | NSIS 安装包（用户级安装，无需管理员权限） |
+| `<name>-<version>-<arch>-setup.exe` | NSIS 安装包（`installer_format = "nsis"`，用户级安装，无需管理员权限） |
+| `<name>-<version>-<arch>-<locale>.msi` | MSI 安装包（`installer_format = "msi"`，全机安装，每个语言一个） |
 | `<name>-<version>-<arch>-portable.zip` | 便携版；`build_portable = false` 时不生成 |
 | 上述文件的 `.sha1` | 与产物同名的 SHA1 校验文件 |
 
@@ -35,14 +36,38 @@ GitHub 镜像相关环境变量见 [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIAB
 ```toml
 [platforms.windows]
 enabled = true
-installer_format = "nsis"        # msi 尚未实现，选择 msi 会在构建时报错
+installer_format = "nsis"        # nsis | msi
 build_portable = true
 # 签名相关（可选）
 # signing_tool_path = "C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64/signtool.exe"
 # certificate_path = "cert.pfx"
 # certificate_password = "..."   # 建议改用 PACOR_WINDOWS_CERT_PASSWORD 环境变量
 # timestamp_url = "http://timestamp.digicert.com"
+# MSI 专用（可选）
+# msi_upgrade_code = "{11223344-5566-7788-99AA-BBCCDDEEFF00}"
+# msi_codepage = 65001
 ```
+
+## MSI 安装包
+
+`installer_format = "msi"` 时每个 `[app.i18n]` 语言各产出一个
+`<name>-<version>-<arch>-<locale>.msi`（`light` 一次只能链接一套本地化文件，见
+[MSI.md](MSI.md)）。与 NSIS 包的关键差异：
+
+| | NSIS | MSI |
+| --- | --- | --- |
+| 安装位置 | `%LOCALAPPDATA%\<name>` | `%ProgramFiles%\<name>` |
+| 权限 | 无需管理员 | **需要管理员**（`msiexec` 会要求提权） |
+| 静默安装/卸载 | `/S` 会停在模板的对话框上 | `/qn` 全程无对话框，退出码即结果 |
+| 部署 | 手动或脚本 | GPO / Intune / SCCM / `msiexec` |
+
+同一个应用建议只选一种格式：两者安装位置与注册表位置不同，可以并存，但会留下两条
+「应用和功能」记录与两份程序。
+
+MSI 的字符串使用**每个语言自己的代码页**（zh-CN 为 936、zh-TW 为 950、ja-JP 为 932、
+en-* 为 1252），因此本地化文案必须能被该代码页编码。`©` 不在 936 中，zh-CN 包里若出现
+`©` 会以 `LGHT0311` 失败；此时可以改写文案（常见做法是用 `(C)`），或设置
+`msi_codepage = 65001` 改用 UTF-8。
 
 ### 代码签名
 
@@ -127,6 +152,22 @@ languages/<NSIS 语言>.nsh     # 各语言的 SECTION_*/DESC_*/MSG_* 字符串
 `%APPDATA%\pacor\windows\nsis\<模板 tag>\Plugins\x86-unicode\nsProcess.dll`；
 使用系统级 NSIS 时，插件则被安装到该系统安装的对应目录。
 
+### MSI 的工具链缓存
+
+MSI 使用固定版本的 WiX（`wix314-binaries.zip`，约 39 MB，解压即用、不依赖已安装的
+.NET SDK 或安装程序），缓存在 `%APPDATA%\pacor\windows\wix\1.1\`，与 NSIS 同构：
+
+```
+candle.exe / light.exe / ...   # WiX 工具链（必要时下载）
+main.wxs                       # 产品、界面、升级、快捷方式模板
+culture.wxl.tmpl               # 本地化模板，每个语言渲染一份
+.extracted                     # 表示工具链已解压的标记
+```
+
+模板与工具链放在同一个 tag 目录下：tag 变化会同时失效两者。首次 MSI 构建前
+`pacor check` 会提示工具链将被下载；离线预置的方式与 NSIS 相同（放好文件并创建
+`.extracted`）。
+
 ### 编译安装包时的三处关键位置
 
 失败时最值得检查的就是下面三点：
@@ -155,10 +196,10 @@ languages/<NSIS 语言>.nsh     # 各语言的 SECTION_*/DESC_*/MSG_* 字符串
 
 ### 版本号
 
-NSIS 的 `VIProductVersion` 只接受四个数字段，而 pubspec 版本是 semver。
-pacor 会做归一化：`1.0.0+1` → `1.0.0.1`，`1.0.0` → `1.0.0.0`，
-`1.2.0-beta.1+7` → `1.2.0.7`，超过 65535 的段会被截断。
-安装界面与卸载信息中仍显示原始的 `1.0.0+1`。
+安装包里的版本号字段只接受四个数字段，而 pubspec 版本是 semver。pacor 会做归一化：
+`1.0.0+1` → `1.0.0.1`，`1.0.0` → `1.0.0.0`，`1.2.0-beta.1+7` → `1.2.0.7`，
+超过 65535 的段会被截断。NSIS 的 `VIProductVersion` 与 MSI 的 `ProductVersion`
+共用这一套归一化；安装界面与卸载信息中仍显示原始的 `1.0.0+1`。
 
 ## 安装与卸载（实测行为）
 
@@ -182,7 +223,7 @@ pacor 会做归一化：`1.0.0+1` → `1.0.0.1`，`1.0.0` → `1.0.0.0`，
 ## 清理
 
 - `pacor clean`：删除输出目录、Flutter 构建产物与 `tmp/` 调试符号；
-- `pacor cache clean [--dry-run]`：删除 `%APPDATA%\pacor` 下的共享缓存（含 NSIS 与模板）。
+- `pacor cache clean [--dry-run]`：删除 `%APPDATA%\pacor` 下的共享缓存（含 NSIS、WiX 与模板）。
 
 ## 常见问题
 
@@ -221,25 +262,51 @@ pacor 固定的下载地址位于 `github.com` 与 `raw.githubusercontent.com`�
 
 - 模板（raw 链接）：`PACOR_GITHUB_RAW_MIRROR_TEMPLATE`；
 - NSIS 发行版（release 资源）：`PACOR_GITHUB_RELEASE_MIRROR_TEMPLATE` 或
-  `PACOR_GITHUB_MIRROR_BASE_URL`。
+  `PACOR_GITHUB_MIRROR_BASE_URL`；
+- WiX 工具链同样是 release 资源（`wixtoolset/wix3` 的 `wix3141rtm`），也走上面两个镜像变量。
 
 也可以离线预置：把 NSIS 发行版与模板按上面的布局放进
 `%APPDATA%\pacor\windows\nsis\<模板 tag>\`，并创建一个空的 `.extracted` 标记文件；
-已存在的模板文件本来就会被跳过，NSIS 则因该标记而不再下载。
+已存在的模板文件本来就会被跳过，NSIS 则因该标记而不再下载。MSI 的
+`%APPDATA%\pacor\windows\wix\<模板 tag>\` 同理。
+
+### `error LGHT0311 ... database code page '936'`（MSI）
+
+本地化文案里有该语言代码页无法表示的字符。最常见的是 `©`（不在 CP936 中；zh-TW 的 CP950
+也只会把它降级成 `c`）。两种处理方式：
+
+1. 改写文案，例如 `版权所有 (C) 2025 ...`——推荐；
+2. 设置 `msi_codepage = 65001`，让整包改用 UTF-8。
+
+`light` 会指出出错的行号，但不会指出是哪个字符。
+
+### `Error 1925: You do not have sufficient privileges ...`（MSI）
+
+MSI 是全机安装包，`msiexec /i` 需要管理员权限；在非提升的会话里（例如自动化账户）会失败于
+`InstallFinalize`，退出码 1603，并干净回滚。构建 MSI 本身不需要提权，只有安装需要。
+不需要提权的校验方式是行政安装（解包）：
+
+```powershell
+msiexec /a .\dist\<name>-<version>-<arch>-<locale>.msi /qn TARGETDIR=C:\temp\unpacked
+```
+
+它按安装布局解出包内文件，可用于与 `build\windows\x64\runner\Release` 逐文件比对。
 
 ## 开发验证
 
-`pacor-packaging-windows` 带有两个默认忽略的端到端测试：一个用真实的 `makensis` 编译渲染出
-的脚本，另一个走完整的 `NsisBuilder::build` 流程（模板准备、插件安装、makensis、产物与
-`.sha1`）：
+`pacor-packaging-windows` 带有几个默认忽略的端到端测试：两个使用真实的 `makensis`（渲染出的
+脚本能否编译、`NsisBuilder::build` 全流程），另一个使用真实的 WiX 构建两个语言的 MSI，并用
+`msiexec /a` 与构建目录逐文件比对：
 
 ```powershell
 $env:PACOR_NSIS_TOOLCHAIN_DIR = "$env:TEMP\pacor-nsis"
+$env:PACOR_MSI_TOOLCHAIN_DIR = "$env:APPDATA\pacor\windows\wix\1.1"
 cargo test -p pacor-packaging-windows -- --ignored
 ```
 
-该目录需要包含 `makensis.exe`（来自
+NSIS 目录需要包含 `makensis.exe`（来自
 <https://github.com/tauri-apps/binary-releases/releases/download/nsis-3/nsis-3.zip>，
 解压后去掉顶层 `nsis-3.08/` 目录）、模板 tag 的 `template.nsi`、
 `Plugins/nsProcess.nsh`、`Plugins/nsProcess.dll` 与 `languages/*.nsh`
-（<https://github.com/pacor-rs/tools> 的对应 tag）。
+（<https://github.com/pacor-rs/tools> 的对应 tag）。WiX 目录需要包含 `candle.exe`、
+`light.exe`、`WixUIExtension.dll`，以及模板 tag 的 `main.wxs` 与 `culture.wxl.tmpl`。
