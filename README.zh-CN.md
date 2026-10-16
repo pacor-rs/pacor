@@ -145,6 +145,8 @@ dist/MyApp-1.0.0+1-x64-portable.zip
 下载到 `%APPDATA%\pacor\windows\nsis\<模板 tag>`，与它渲染的模板放在一起。
 产物细节、签名选项、缓存布局与由此可解释的报错见 [docs/WINDOWS.md](docs/WINDOWS.md)。
 
+MSI 安装包尚未实现，其设计方案（选型、模板契约与实测结论）见 [docs/MSI.md](docs/MSI.md)。
+
 ## 项目结构
 
 Pacor 采用 Cargo workspace，每个 crate 职责单一：

@@ -4,6 +4,8 @@
 配置项的完整注释模板见 [`crates/pacor-core/src/config/template.toml`](../crates/pacor-core/src/config/template.toml)，
 GitHub 镜像相关环境变量见 [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md)。
 
+> MSI 安装包尚未实现，其设计方案（选型、模板契约、实测结论）见 [MSI.md](MSI.md)。
+
 ## 产物
 
 一次成功的构建会在 `[build] output_dir`（默认 `dist/`）下写入：

@@ -156,6 +156,9 @@ pacor downloads a pinned NSIS build into
 [`docs/WINDOWS.md`](docs/WINDOWS.md) documents the artifacts, the signing
 options, the cache layout and the failures that layout explains.
 
+MSI packages are not implemented yet; the design — toolchain, template contract
+and the spike findings behind them — is in [`docs/MSI.md`](docs/MSI.md).
+
 ## Project layout
 
 Pacor is a Cargo workspace. Each crate has a single responsibility:
