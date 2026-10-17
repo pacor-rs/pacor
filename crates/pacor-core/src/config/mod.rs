@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-pub use android::AndroidConfig;
+pub use android::{AndroidConfig, AndroidPackageFormat};
 pub use app::{AppConfig, AppMetadata};
 pub use build::{BuildOptions, FlutterBuildMode};
 pub use linux::{DebianConfig, LinuxConfig, LinuxPackageFormat};

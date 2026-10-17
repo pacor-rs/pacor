@@ -120,15 +120,13 @@ pub enum Commands {
     },
 
     /// Build an Android APK (alias for `build --target android`).
-    #[command(hide = true)]
+    ///
+    /// Signing is driven by `platforms.android.keystore_file`, so this command
+    /// takes no signing switch of its own. See docs/ANDROID.md.
     Android {
         /// Reuse existing Flutter build artifacts.
         #[arg(long)]
         use_existing_flutter_build: bool,
-
-        /// Sign the APK using the configured keystore (not implemented yet).
-        #[arg(long)]
-        sign_apk: bool,
     },
 
     /// Remove downloaded tools and templates from the cache.

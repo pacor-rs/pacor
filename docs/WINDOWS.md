@@ -104,8 +104,10 @@ signtool sign /fd SHA256 /td SHA256 /tr <timestamp_url> /f <certificate_path> /p
 决定 `flutter build windows --<mode>`，并决定读取哪个构建目录
 （`build/windows/<arch>/runner/<Release|Debug|Profile>`）。
 `release` 与 `profile` 会附加 `--obfuscate --split-debug-info=tmp/`，调试符号写入项目下的
-`tmp/`（`pacor clean` 会删除）；`debug` 不能混淆，因此不附加这些参数。
-Android 后端目前始终构建 release APK。
+`tmp/`（构建结束时由清理步骤删除，`--skip-cleanup` 可保留；`pacor clean` 只删除 `dist/` 与
+`build/`，不含 `tmp/`）；`debug` 不能混淆，因此不附加这些参数。
+Android 后端不使用构建模式（始终 release，不混淆，符号同样写入 `tmp/`），见
+[ANDROID.md](ANDROID.md)。
 
 ## 可执行文件与版权信息的识别
 

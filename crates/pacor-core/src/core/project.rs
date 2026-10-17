@@ -62,6 +62,26 @@ impl FlutterProject {
         )
     }
 
+    /// Directory Flutter writes Android APKs to.
+    ///
+    /// APKs land in a single directory because the ABI and the build mode are
+    /// part of the file name, so this needs neither [`Arch`] nor a build mode.
+    /// Keeping it free of the host architecture is what lets an Android build
+    /// run on any host pacor itself supports.
+    pub fn android_build_path(project_root: &Path) -> PathBuf {
+        project_root.join("build/app/outputs/flutter-apk")
+    }
+
+    /// Directory Flutter writes Android App Bundles to.
+    ///
+    /// Unlike APKs, the bundle lives in a mode-named subdirectory
+    /// (`bundle/release/`), and with a product flavor in
+    /// `bundle/<flavor><Mode>/`; see [`crate`]-level notes in the Android
+    /// backend's `bundle` module for the lookup rules.
+    pub fn android_bundle_path(project_root: &Path) -> PathBuf {
+        project_root.join("build/app/outputs/bundle")
+    }
+
     /// Get Flutter build path for a given platform, architecture and build mode.
     ///
     /// Flutter writes desktop bundles into a mode-named directory (`Release`,
@@ -75,7 +95,7 @@ impl FlutterProject {
         mode: FlutterBuildMode,
     ) -> PathBuf {
         match platform {
-            Platform::Android => project_root.join("build/app/outputs/flutter-apk"),
+            Platform::Android => Self::android_build_path(project_root),
             Platform::Linux => project_root.join(format!(
                 "build/linux/{}/{}/bundle",
                 arch.as_str(),
@@ -199,6 +219,17 @@ mod tests {
     #[test]
     fn android_ignores_the_build_mode() {
         let root = Path::new("/project");
+
+        assert_eq!(
+            FlutterProject::android_build_path(root),
+            Path::new("/project/build/app/outputs/flutter-apk"),
+            "the APK directory is independent of the host architecture"
+        );
+        assert_eq!(
+            FlutterProject::android_bundle_path(root),
+            Path::new("/project/build/app/outputs/bundle"),
+            "the App Bundle directory holds one mode/flavor subdirectory each"
+        );
 
         for mode in [
             FlutterBuildMode::Release,

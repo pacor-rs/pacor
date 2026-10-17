@@ -15,7 +15,9 @@ description = "Android (APK) packaging backends for pacor."
 pacor-core.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
-tempfile.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+temp-env.workspace = true
+toml.workspace = true

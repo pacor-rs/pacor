@@ -12,7 +12,10 @@ use serde::{Deserialize, Serialize};
 ///
 /// Cannot build release mode for x86 ABI.
 /// For more information see https://flutter.dev/to/android-supported-architectures
-#[derive(Debug, Clone, Deserialize, Serialize, Hash, Eq, PartialEq)]
+///
+/// The ordering (`Arm` < `Arm64` < `X64`) is what makes `BTreeSet<TargetAbi>`
+/// and every list derived from it stable across runs.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, Hash, Eq, PartialEq, PartialOrd, Ord)]
 pub enum TargetAbi {
     /// 32-bit ARM architecture (ARMv7) - used for older Android devices.
     #[serde(rename = "armeabi-v7a", alias = "arm")]

@@ -119,13 +119,35 @@ category = "public.app-category.entertainment"
 # notarize_credentials = "AC_PASSWORD"   # notarytool keychain profile
 
 # ---------------------------------------------------------------------------
-# Android: APK
+# Android: per-ABI APK and/or an Android App Bundle
 # ---------------------------------------------------------------------------
 [platforms.android]
 enabled = true
+# ABIs to build: "armeabi-v7a", "arm64-v8a", "x86_64". At least one.
+# An APK is produced per ABI; a bundle is one file containing these ABIs, so
+# keeping only arm64-v8a here also limits the bundle to 64-bit ARM devices.
 target_abi = ["arm64-v8a"]
-# keystore_file = "android/app/upload-keystore.jks"
+# Output formats: "apk" (installed directly), "aab" (uploaded to Google Play).
+# `aab` is opt-in: it cannot be installed on a device, and projects that only
+# distribute APKs should not pay for building one.
+formats = ["apk"]
+# formats = ["apk", "aab"]
+# Gradle product flavor, passed through to `flutter build … --flavor`.
+# flavor = "prod"
+# Signing. Setting `keystore_file` enables it for every configured format, and
+# then the alias plus both passwords are required — pacor fails instead of
+# shipping an unsigned artifact.
+# keystore_file = "android/app/upload-keystore.jks"   # relative to the project root
 # key_alias = "upload"
-# Prefer the PACOR_ANDROID_KEYSTORE_PASSWORD / PACOR_ANDROID_KEY_PASSWORD env vars.
-# PACOR_ANDROID_KEYSTORE_PASSWORD="..."
-# PACOR_ANDROID_KEY_PASSWORD="..."
+# Prefer the PACOR_ANDROID_KEYSTORE_PASSWORD / PACOR_ANDROID_KEY_PASSWORD
+# environment variables over the literals below; the literals end up in the
+# signing command line.
+# keystore_password = "..."
+# key_password = "..."
+# APKs are signed with `apksigner` (Android SDK build-tools), App Bundles with
+# `jarsigner` (a JDK). Both are looked up on PATH and in their usual homes; set
+# these to point at specific ones. A tool path alone does not enable signing.
+# signing_tool_path = "C:/Android/sdk/build-tools/35.0.0/apksigner.bat"
+# jarsigner_path = "C:/Program Files/Android/Android Studio/jbr/bin/jarsigner.exe"
+#
+# Android always builds release and does not use `[app.i18n]`; see docs/ANDROID.md.

@@ -594,8 +594,11 @@ version = "0.1.0-alpha"
 dependencies = [
  "anyhow",
  "pacor-core",
+ "temp-env",
  "tempfile",
+ "toml",
  "tracing",
+ "zip",
 ]
 
 [[package]]

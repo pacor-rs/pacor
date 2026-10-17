@@ -19,7 +19,7 @@ your Flutter build output into an installer for the target you choose:
 | macOS     | `.dmg` (optional codesign + notarization) + updater `.tar.gz` | implemented   |
 | Windows   | NSIS installer or per-machine MSI, plus a portable `.zip` | implemented   |
 | Linux     | AppImage and/or `.deb`                                  | implemented   |
-| Android   | per-ABI `.apk`                                          | implemented   |
+| Android   | per-ABI `.apk` and/or `.aab` (optional signing)          | implemented   |
 | —         | RPM                                                     | not yet       |
 
 > Early-stage project: features and configuration may still change.
@@ -113,6 +113,9 @@ minimum_system_version = "10.14"
 
 [platforms.android]
 target_abi = ["arm64-v8a"]
+formats = ["apk"]                                  # or ["apk", "aab"] for Google Play
+# flavor = "prod"
+# keystore_file = "android/app/upload-keystore.jks"  # + key_alias and the two passwords
 ```
 
 `flutter_build_mode` selects the Flutter build mode for the Windows, macOS and
@@ -123,7 +126,8 @@ Secrets are read from the environment first and are never written back:
 `PACOR_WINDOWS_CERT_PASSWORD`, `PACOR_ANDROID_KEYSTORE_PASSWORD`,
 `PACOR_ANDROID_KEY_PASSWORD`. See
 [docs/ENVIRONMENT_VARIABLES.md](docs/ENVIRONMENT_VARIABLES.md) for the GitHub
-mirror variables. `PACOR_OUTPUT_DIR` and `PACOR_BUILD_MODE` override the
+mirror variables, and [docs/ANDROID.md](docs/ANDROID.md) for the APK signing
+configuration. `PACOR_OUTPUT_DIR` and `PACOR_BUILD_MODE` override the
 corresponding `[build]` keys.
 
 ## Windows packages
@@ -162,6 +166,52 @@ constraints the implementation is built around.
 
 [`docs/WINDOWS.md`](docs/WINDOWS.md) documents the artifacts, the signing
 options, the cache layout and the failures that layout explains.
+
+## Android packages
+
+`pacor build --target android` (or `pacor android`) builds one release APK per
+configured ABI in a single Flutter invocation and writes them, each with a
+`.sha1` next to it, into the output directory:
+
+```
+dist/MyApp-1.0.0+1-arm64-v8a.apk
+```
+
+An Android App Bundle — the format Google Play publishes from — is opt-in,
+because it cannot be installed directly and a project that only ships APKs should
+not pay for building one:
+
+```toml
+[platforms.android]
+formats = ["apk", "aab"]     # default is ["apk"]
+```
+
+which adds `dist/MyApp-1.0.0+1.aab` from `flutter build appbundle` in the same
+run. `target_abi` selects the ABIs (`armeabi-v7a`, `arm64-v8a`, `x86_64`; at least
+one) — for the bundle it decides which ABIs that single file contains — and
+`flavor` is passed through to `flutter build … --flavor`.
+
+Signing is driven by `platforms.android`: setting `keystore_file` enables it for
+every configured format, and `key_alias` plus both passwords
+(`PACOR_ANDROID_KEYSTORE_PASSWORD`, `PACOR_ANDROID_KEY_PASSWORD`) are then
+required, so a misconfigured keystore fails before the build rather than shipping
+an unsigned artifact. APKs go through `apksigner` (Android SDK build-tools), App
+Bundles through `jarsigner` (a JDK); each is looked up in its configured path,
+then `PATH`, then its usual home. A bundle is stripped of the signature Gradle
+produced before pacor signs it, so the published bundle carries exactly one
+signer — `jarsigner` adds signatures rather than replacing them, and Flutter's own
+template signs release builds with the **debug** certificate.
+
+Without a configured keystore the artifact keeps whatever signature Gradle
+produced, and pacor inspects it and warns when it carries that debug certificate.
+Flutter's Dart AOT symbols are split into `tmp/` so they stay out of the
+artifacts, and they are deleted by the cleanup step — pass `--skip-cleanup` to
+keep them for `flutter symbolize`.
+
+Android always builds release (the build mode is part of the file name) and does
+not use `[app.i18n]`. [`docs/ANDROID.md`](docs/ANDROID.md) documents the
+configuration, both signing toolchains, the known limitations and the failures
+the implementation explains.
 
 ## Project layout
 

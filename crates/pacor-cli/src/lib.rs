@@ -4,9 +4,6 @@
 //! for command dispatch. The library is intentionally thin: all domain logic
 //! lives in `pacor-core` and `pacor-packaging`.
 
-#[macro_use]
-extern crate tracing;
-
 pub mod cli;
 mod log;
 

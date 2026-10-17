@@ -19,7 +19,7 @@ Flutter 构建产物打包成安装包：
 | macOS     | `.dmg`（可选签名与公证）+ 自动更新 `.tar.gz`                  | 已实现      |
 | Windows   | NSIS 安装包或全机 MSI，以及便携版 `.zip`                      | 已实现      |
 | Linux     | AppImage 和/或 `.deb`                                         | 已实现      |
-| Android   | 按 ABI 拆分的 `.apk`                                          | 已实现      |
+| Android   | 按 ABI 拆分的 `.apk` 和/或 `.aab`（可选签名）                 | 已实现      |
 | —         | RPM                                                           | 尚未实现    |
 
 > 项目处于前期阶段，功能和配置仍可能变化。
@@ -111,6 +111,9 @@ minimum_system_version = "10.14"
 
 [platforms.android]
 target_abi = ["arm64-v8a"]
+formats = ["apk"]                                  # 上架 Play 用 ["apk", "aab"]
+# flavor = "prod"
+# keystore_file = "android/app/upload-keystore.jks"  # 还需 key_alias 与两个口令
 ```
 
 `flutter_build_mode` 决定 Windows、macOS、Linux 后端的 Flutter 构建模式，以及读取产物的
@@ -119,7 +122,8 @@ target_abi = ["arm64-v8a"]
 密钥优先从环境变量读取，且不会被写回配置文件：
 `PACOR_WINDOWS_CERT_PASSWORD`、`PACOR_ANDROID_KEYSTORE_PASSWORD`、
 `PACOR_ANDROID_KEY_PASSWORD`。GitHub 镜像相关变量见
-[docs/ENVIRONMENT_VARIABLES.md](docs/ENVIRONMENT_VARIABLES.md)。
+[docs/ENVIRONMENT_VARIABLES.md](docs/ENVIRONMENT_VARIABLES.md)，APK 签名配置见
+[docs/ANDROID.md](docs/ANDROID.md)。
 `PACOR_OUTPUT_DIR` 与 `PACOR_BUILD_MODE` 会覆盖 `[build]` 中的对应项。
 
 ## Windows 平台
@@ -149,6 +153,42 @@ dist/MyApp-1.0.0+1-x64-portable.zip
 权限），`msi` 为全机安装（位于 `%ProgramFiles%`，需要管理员权限），并为每个配置的语言各产出
 一个包——`light` 无法合并定义了相同标识符的本地化文件。工具链、模板契约与实现所遵循的约束见
 [docs/MSI.md](docs/MSI.md)。
+
+## Android 平台
+
+`pacor build --target android`（或 `pacor android`）在一次 Flutter 调用中为每个配置的 ABI 构建
+一个 release APK，并在输出目录写入产物及其同名 `.sha1`：
+
+```
+dist/MyApp-1.0.0+1-arm64-v8a.apk
+```
+
+Android App Bundle（Google Play 的分发格式）是**可选项**：它不能直接安装，只发布 APK 的工程
+没必要为它买单。
+
+```toml
+[platforms.android]
+formats = ["apk", "aab"]     # 默认 ["apk"]
+```
+
+这样同一次构建会再执行 `flutter build appbundle` 并产出 `dist/MyApp-1.0.0+1.aab`。
+`target_abi` 选择 ABI（`armeabi-v7a`、`arm64-v8a`、`x86_64`，至少一项）——对 APK 它决定产出
+哪些文件，对 AAB 它决定这**唯一一个**文件里包含哪些 ABI；`flavor` 会透传为
+`flutter build … --flavor`。
+
+签名由 `platforms.android` 驱动：配置 `keystore_file` 即对所选格式全部开启，此时 `key_alias`
+与两个口令（`PACOR_ANDROID_KEYSTORE_PASSWORD`、`PACOR_ANDROID_KEY_PASSWORD`）都是必填项，配置
+错误会在构建前失败，而不是产出未签名的产物。APK 走 `apksigner`（Android SDK build-tools），
+AAB 走 `jarsigner`（JDK）；两者都按"配置路径 → `PATH` → 各自的常见安装位置"查找。AAB 在签名前
+会**剥离 Gradle 已有的 JAR 签名**，因此发布出去的包只有一个签名者——`jarsigner` 是追加签名而不是
+替换，而 Flutter 自带模板的 release 构建用的是 **debug** 证书。
+
+未配置 keystore 时，产物保持 Gradle 给出的签名；pacor 会检测并在它是 debug 证书时告警。Dart 的
+AOT 符号被 `--split-debug-info=tmp/` 拆到项目下的 `tmp/`，因此不进入产物；该目录由清理步骤删除，
+需要保留（供 `flutter symbolize` 使用）时加 `--skip-cleanup`。
+
+Android 始终构建 release（构建模式体现在 APK 文件名里）、不使用 `[app.i18n]`。
+配置项、两套签名工具链、已知限制与常见报错见 [docs/ANDROID.md](docs/ANDROID.md)。
 
 ## 项目结构
 

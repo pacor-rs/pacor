@@ -7,7 +7,7 @@
 
 use anyhow::{Result, bail};
 
-use pacor_core::config::{InstallerFormat, LinuxPackageFormat, PacorConfig};
+use pacor_core::config::{AndroidPackageFormat, InstallerFormat, LinuxPackageFormat, PacorConfig};
 use pacor_core::core::builder::BundleBuilder;
 use pacor_core::platforms::{BuildArtifact, Platform};
 
@@ -91,7 +91,19 @@ pub fn apply_format_overrides(
 
         Platform::MacOS => require_single_format(formats, pacor_packaging_macos::SUPPORTED_FORMAT)?,
         Platform::Android => {
-            require_single_format(formats, pacor_packaging_android::SUPPORTED_FORMAT)?
+            // `apk` and `aab` are independent artifacts, so several values are
+            // meaningful here — unlike the single-format backends above.
+            let parsed: std::collections::BTreeSet<AndroidPackageFormat> = formats
+                .iter()
+                .map(|format| format.parse::<AndroidPackageFormat>())
+                .collect::<std::result::Result<_, _>>()
+                .map_err(anyhow::Error::msg)?;
+
+            config
+                .platforms
+                .android
+                .get_or_insert_with(Default::default)
+                .formats = parsed;
         }
     }
 
@@ -197,16 +209,45 @@ mod tests {
     fn single_format_backends_accept_their_format_only() {
         let mut config = config();
         assert!(apply_format_overrides(&mut config, Platform::MacOS, &formats(&["dmg"])).is_ok());
-        assert!(apply_format_overrides(&mut config, Platform::Android, &formats(&["apk"])).is_ok());
 
         let error = apply_format_overrides(&mut config, Platform::MacOS, &formats(&["apk"]))
             .unwrap_err()
             .to_string();
         assert!(error.contains("supported: dmg"), "{error}");
+    }
 
+    #[test]
+    fn android_accepts_several_formats_and_creates_the_section_when_absent() {
+        let mut config = config();
+        apply_format_overrides(&mut config, Platform::Android, &formats(&["aab", "apk"])).unwrap();
+
+        let android = config.platforms.android.expect("section should be created");
+        assert!(android.builds_apk());
+        assert!(android.builds_bundle());
+        assert_eq!(android.format_list(), "apk, aab");
+    }
+
+    /// Bundles are opt-in, and `--format` must not silently keep the APK.
+    #[test]
+    fn android_can_be_restricted_to_the_bundle() {
+        let mut config = config();
+        apply_format_overrides(&mut config, Platform::Android, &formats(&["aab"])).unwrap();
+
+        let android = config.platforms.android.unwrap();
+        assert!(!android.builds_apk());
+        assert!(android.builds_bundle());
+    }
+
+    #[test]
+    fn android_rejects_an_unknown_format_and_names_the_valid_ones() {
+        let mut config = config();
         let error = apply_format_overrides(&mut config, Platform::Android, &formats(&["dmg"]))
             .unwrap_err()
             .to_string();
-        assert!(error.contains("supported: apk"), "{error}");
+
+        assert!(error.contains("dmg"), "{error}");
+        assert!(error.contains("apk, aab"), "{error}");
+        // A failed override must not partially apply.
+        assert!(config.platforms.android.is_none());
     }
 }

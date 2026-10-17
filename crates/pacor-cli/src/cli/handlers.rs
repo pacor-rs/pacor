@@ -239,7 +239,10 @@ fn platform_summary(config: &PacorConfig, target: Platform) -> Option<String> {
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("target_abi = [{abis}]")
+            format!(
+                "formats = [{}], target_abi = [{abis}]",
+                android.format_list()
+            )
         }),
     }
 }

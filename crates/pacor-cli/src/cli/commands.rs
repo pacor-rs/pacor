@@ -28,20 +28,14 @@ pub fn execute_cli_command(cli: Cli) -> Result<()> {
 
         Commands::Android {
             use_existing_flutter_build,
-            sign_apk,
-        } => {
-            if sign_apk {
-                warn!("--sign-apk is not implemented yet; the APK will not be signed");
-            }
-            handlers::build(BuildRequest {
-                target: Some(pacor_core::platforms::Platform::Android),
-                formats: Vec::new(),
-                use_existing_flutter_build,
-                skip_cleanup: false,
-                command_output: cli.command_output,
-                config_path: cli.config_path,
-            })
-        }
+        } => handlers::build(BuildRequest {
+            target: Some(pacor_core::platforms::Platform::Android),
+            formats: Vec::new(),
+            use_existing_flutter_build,
+            skip_cleanup: false,
+            command_output: cli.command_output,
+            config_path: cli.config_path,
+        }),
 
         Commands::Cache { action } => match action {
             CacheAction::Clean { dry_run } => handlers::cache_clean(dry_run),
