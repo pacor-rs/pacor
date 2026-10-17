@@ -17,7 +17,8 @@
 //! The builder assumes a standard Flutter Windows project layout
 //! (e.g., `windows/runner/resources/app_icon.ico`).
 //!
-//! Note: MSI support is planned but not yet implemented.
+//! `installer_format` selects between the per-user NSIS installer and the
+//! per-machine MSI packages; see `docs/MSI.md` for the MSI constraints.
 
 #[macro_use]
 extern crate tracing;
