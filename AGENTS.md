@@ -205,8 +205,9 @@ gh pr create --base main --fill
   committing on `main` and moving the commits afterwards: a rebased-away commit still shows
   up in the reflog and in whoever is watching the terminal, and it means part of the work
   was written under different assumptions than the part that is reviewed.
-- **Delete the branch after merging** (`gh pr merge --delete-branch`); a stale branch is the
-  next person's false start.
+- **The merged branch is deleted for you**: `delete-merged-branch.yml` removes the head ref of
+  every merged pull request (it keeps long-lived names, forks, and a branch that another open
+  pull request still uses). `gh pr merge --delete-branch` just does not wait for it.
 
 The one commit that reaches `main` without a pull request is the release bump that
 `bump.yml` pushes. It is a maintainer action that changes nothing but the version and the
@@ -231,7 +232,7 @@ agreement — a rule the repository's own automation ignores is not a rule.
   ```bash
   docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:latest -color
   ```
-- `docs/CI.md` has the full picture: when each of the seven workflows runs, how the cache keys
+- `docs/CI.md` has the full picture: when each of the eight workflows runs, how the cache keys
   are built, and what the release and nightly jobs do.
 
 ## Known traps
