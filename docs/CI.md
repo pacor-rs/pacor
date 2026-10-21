@@ -9,7 +9,7 @@
 | 文件 | 触发 | 作用 |
 | ---- | ---- | ---- |
 | `pr-check.yml` | PR → `main`（`crates/**`、`Cargo.toml`、`Cargo.lock`、`.cargo/**`、`.github/**`、`docs/**`、`*.md`） | 三平台的 fmt / clippy / test / release 构建，release profile 的 clippy，三个交叉目标的 `cargo check`，actionlint，以及打了标签的自动合并 |
-| `build-binaries.yml` | 被 `publish.yml` 与 `nightly.yml` 以 `workflow_call` 调用 | 六个平台的 release 二进制：构建、UPX、冒烟测试、打包、`.sha256`、上传 artifact |
+| `build-binaries.yml` | 被 `publish.yml` 与 `nightly.yml` 以 `workflow_call` 调用 | 六个平台的 release 二进制：构建、可选 UPX、冒烟测试、打包、`.sha256`、上传 artifact |
 | `publish.yml` | 推送 `v*` tag，或手动 dispatch（填 `tag`） | 校验 tag 与 `Cargo.toml` 的版本一致 → 调 `build-binaries` → 建草稿 release → 上传 → 发布 |
 | `nightly.yml` | 每天 04:00 UTC，或手动 dispatch | 构建 `main`，整体替换 `nightly` 预发布 |
 | `warm-cache.yml` | `main` 上的 Cargo 文件变更、每周一 05:00 UTC、手动 dispatch | 提前把 cargo registry 与 target 缓存写好 |
@@ -31,8 +31,10 @@
    `Cargo.lock` 与清单是否一致，由构建时的 `--locked` 保证。
 4. 六个平台并行构建 → 每个产出一个压平的压缩包（解压就是二进制，不带
    `target/<triple>/release/` 目录结构）+ 同名 `.sha256`。
-   Windows 与 Linux 用 UPX `--best --lzma` 压缩（压不动就跳过，不让它阻塞发布），
-   macOS 不压：UPX 产出的 Mach-O 不正常，省下的体积不值得这个风险。
+   **UPX 压缩是可选的，默认关闭**：需要更小的下载体积时，在手动 dispatch 时勾上
+   `compress`（Linux 与 Windows 生效，压不动会打 warning 并继续，不阻塞发布）。
+   默认关闭的原因是它会把可执行文件改写——崩溃报告里的回溯变难读，也更容易触发杀软误报；
+   用于排查的 nightly 尤其不需要它。macOS 从不压缩：UPX 产出的 Mach-O 不可靠。
 5. release **先建草稿、上传完再 publish**：中途失败不会留下一个被 "latest" 指向的半成品。
 6. 版本号带 `-alpha`/`-beta`/任何预发布后缀时自动加 `--prerelease --latest=false`，
    不会占用 latest。
@@ -79,8 +81,8 @@
 
 ## 漂移防护
 
-- **所有 action 固定到 40 位 commit SHA**，后面跟版本注释。浮动 tag（`@v4`）意味着上游
-  一次推送就能改掉 CI 实际执行的代码。
+- **所有 action 用版本号引用**（`@v7`、`@v5.1.0`），不用 commit SHA：评审时能直接看出
+  跑的是哪个版本。浮动分支（`@main`）不叫版本号，一律不用。
 - **每个 job 都有 `timeout-minutes`**：挂死的 job 不会占着 runner 跑 6 小时。
 - **concurrency**：PR 上取消旧运行（新 push 让旧结果失效）；发布、清理、提版本有并发组
   但不取消——一个上传或删除循环被腰斩，留下的半成品比慢一点更糟。

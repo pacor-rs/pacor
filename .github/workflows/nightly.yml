@@ -9,6 +9,12 @@ on:
     # 04:00 UTC (12:00 Beijing time)
     - cron: "0 4 * * *"
   workflow_dispatch:
+    inputs:
+      compress:
+        description: "Compress the binaries with UPX (Linux and Windows)"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: nightly
@@ -33,7 +39,7 @@ jobs:
       short_sha: ${{ steps.check.outputs.short_sha }}
       version: ${{ steps.check.outputs.version }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -77,6 +83,9 @@ jobs:
       contents: read
     with:
       ref: ${{ needs.check.outputs.sha }}
+      # A nightly is meant for people debugging `main`, so uncompressed is the useful
+      # default and compression is opt-in. A scheduled run has no inputs at all.
+      compress: ${{ github.event.inputs.compress == 'true' }}
       # A nightly is superseded within a day; there is no reason to keep its
       # intermediate artifacts around.
       retention_days: 1
@@ -90,12 +99,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Download the binaries
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true

@@ -48,11 +48,11 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
 
       - name: Setup Rust
         id: rust-toolchain
-        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
@@ -60,7 +60,7 @@ jobs:
       # the entries the pull-request jobs only read. The keys are byte-for-byte the ones
       # pr-check.yml uses, otherwise warming would create a parallel set nothing reads.
       - name: Cache cargo registry
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/bin/
@@ -72,7 +72,7 @@ jobs:
             ${{ runner.os }}-cargo-registry-
 
       - name: Cache debug build
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache@v5
         with:
           path: |
             target/debug/.fingerprint
@@ -83,7 +83,7 @@ jobs:
             ${{ runner.os }}-rust-debug-${{ steps.rust-toolchain.outputs.cachekey }}-
 
       - name: Cache release build
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache@v5
         with:
           path: |
             target/release/.fingerprint

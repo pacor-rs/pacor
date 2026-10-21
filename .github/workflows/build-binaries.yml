@@ -16,6 +16,11 @@ on:
         required: false
         type: number
         default: 3
+      compress:
+        description: "Compress the binaries with UPX (Linux and Windows only)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -34,52 +39,55 @@ jobs:
       fail-fast: false
       matrix:
         platform:
+          # `upx: false` means "this platform cannot be compressed even when asked":
+          # UPX produces a Mach-O binary that is not reliably runnable, so the macOS
+          # entries opt out rather than depend on the caller remembering.
           - name: macOS-x64
             os: macos-latest
             target: x86_64-apple-darwin
             binary: pacor
-            compress: false
+            upx: false
           - name: macOS-arm64
             os: macos-latest
             target: aarch64-apple-darwin
             binary: pacor
-            compress: false
+            upx: false
 
           - name: Linux-x64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary: pacor
-            compress: true
+            upx: true
           - name: Linux-arm64
             os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             binary: pacor
-            compress: true
+            upx: true
 
           - name: Windows-x64
             os: windows-latest
             target: x86_64-pc-windows-msvc
             binary: pacor.exe
-            compress: true
+            upx: true
           - name: Windows-arm64
             os: windows-latest
             target: aarch64-pc-windows-msvc
             binary: pacor.exe
-            compress: true
+            upx: true
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
 
       - name: Setup Rust
         id: rust-toolchain
-        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.platform.target }}
 
       - name: Cache cargo registry
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/.cargo/bin/
@@ -91,7 +99,7 @@ jobs:
             ${{ runner.os }}-cargo-registry-
 
       - name: Cache release build
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/restore@v5
         with:
           path: |
             target/${{ matrix.platform.target }}/release/.fingerprint
@@ -112,16 +120,18 @@ jobs:
       - name: Build
         run: cargo build --workspace --release --locked --target ${{ matrix.platform.target }}
 
-      # macOS is deliberately left alone: UPX cannot produce a Mach-O binary that the
-      # platform will happily run, and the compressed size is not worth the risk there.
+      # Compression is off unless the caller asks for it: it saves roughly half the
+      # download size, and it also rewrites the executable, which costs a clear
+      # backtrace in crash reports and upsets some antivirus heuristics. A release that
+      # needs smaller binaries turns it on; a nightly that is being debugged does not.
       - name: Install UPX (Linux)
-        if: matrix.platform.compress && runner.os == 'Linux'
+        if: inputs.compress && matrix.platform.upx && runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y upx-ucl
 
       - name: Install UPX (Windows)
-        if: matrix.platform.compress && runner.os == 'Windows'
+        if: inputs.compress && matrix.platform.upx && runner.os == 'Windows'
         run: |
           Invoke-WebRequest -Uri "https://github.com/upx/upx/releases/download/v4.2.1/upx-4.2.1-win64.zip" -OutFile upx.zip
           Expand-Archive -Path upx.zip -DestinationPath .
@@ -130,7 +140,7 @@ jobs:
       # A compression failure is not worth failing a release over: the binary is
       # correct either way, it is just bigger.
       - name: Compress
-        if: matrix.platform.compress
+        if: inputs.compress && matrix.platform.upx
         shell: bash
         env:
           TARGET: ${{ matrix.platform.target }}
@@ -200,7 +210,7 @@ jobs:
           cat "${asset}.sha256"
 
       - name: Upload the artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform.name }}
           path: |
