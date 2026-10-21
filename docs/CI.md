@@ -99,6 +99,10 @@ A few rules, each of which was written down after being learned the hard way:
 
 ## Drift protection
 
+- **`main` takes changes only through a pull request.** Every change arrives on its own
+  branch and merges once `pr-check` is green; nothing is pushed to `main` directly. The one
+  exception is the release bump that `bump.yml` pushes, which only works while the bot is on
+  `main`'s bypass list — otherwise it has to open a pull request too.
 - **Every action is referenced by version** (`@v7`, `@v5.1.0`), not by commit SHA: a reviewer
   can see which version runs. A floating branch (`@main`) is not a version and is never used.
 - **Every job has a `timeout-minutes`**: a hung job does not hold a runner for six hours.
