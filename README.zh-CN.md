@@ -258,7 +258,7 @@ cargo check --workspace --target aarch64-apple-darwin
 
 ## 持续集成与发布
 
-`.github/workflows` 下有七个工作流，分别负责检查、发布与缓存维护；
+`.github/workflows` 下有八个工作流，分别负责检查、发布、缓存维护与分支清理；
 **[docs/CI.md](docs/CI.zh-CN.md)** 逐个说明它们什么时候跑、跑什么，以及发版流程。
 
 简述：PR 会在 Linux、macOS、Windows 上跑 `fmt`、`clippy`、测试与 release 构建，另外还有一次

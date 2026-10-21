@@ -4,7 +4,7 @@
 
 # CI and the release process
 
-`.github/workflows` holds seven workflows. They share one goal: **a check that can run
+`.github/workflows` holds eight workflows. They share one goal: **a check that can run
 locally must run on every pull request; something that cannot run locally (the binaries
 for six platforms) runs only when it is really needed; and any state that "looks green
 because nothing happened" has to say so out loud.**
@@ -20,6 +20,7 @@ because nothing happened" has to say so out loud.**
 | `warm-cache.yml` | Cargo file changes on `main`, Monday 05:00 UTC, manual dispatch | write the cargo registry and target caches ahead of time |
 | `cleanup-old-caches.yml` | Monday 00:00 UTC, or manual dispatch (`dry_run`) | keep only the newest entry of each cache family |
 | `bump.yml` | manual dispatch (`version`, optional `dry_run`) | bump the version, sync `Cargo.lock`, commit, tag, and start the release |
+| `delete-merged-branch.yml` | a pull request is closed after being merged | delete the head branch, unless it is long-lived, from a fork, or still used by an open pull request |
 
 ## Releasing
 
@@ -66,6 +67,24 @@ tree and overwrites the existing release's notes and assets (`gh release upload 
   release tag (that release already covers it). A skip writes a `GITHUB_STEP_SUMMARY` line
   saying why, so "nothing was built" cannot be misread as "everything was verified".
 - Intermediate artifacts are kept for one day.
+
+## Branch cleanup
+
+`delete-merged-branch.yml` runs when a pull request is closed **and merged** — the
+`automerge` label and a person pressing "Merge" are the same event — and deletes the head
+branch. It keeps a branch when:
+
+- it is a long-lived name (`main`, `master`, `develop`, `release/*`, `release-*`): a pull
+  request that happened to use one of those as its head is not an argument for deleting it;
+- the pull request came from a fork: the branch lives in another repository, which this
+  token cannot reach;
+- another open pull request still uses it as its head — a stacked pair looks exactly like
+  that, and deleting the ref would close the child pull request without a decision.
+
+A ref that is already gone counts as success: with the repository's own "Automatically
+delete head branches" setting enabled, this workflow is a second opinion rather than the
+mechanism. Every run writes what it did to the job summary, so a branch that survived has
+its reason printed next to it.
 
 ## Caches
 
