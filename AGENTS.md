@@ -53,6 +53,11 @@ Some of these are not ceremony:
   rustls — so the `aarch64-unknown-linux-gnu` check installs `gcc-aarch64-linux-gnu`
   and every other target needs nothing. A new dependency that needs a C toolchain or a
   system library invalidates this and is a change worth discussing on its own.
+- **Every CI job names its target explicitly**, the host ones included
+  (`cargo test --target x86_64-unknown-linux-gnu`). That is not about correctness — the
+  command above builds the same thing — but about caches: `target/<triple>/…` is a path
+  one workflow can fill in for another's job, while `target/debug` is only reachable by the
+  job that runs it, and a cache written by a pull request is invisible to the next one.
 - There is no `rustfmt.toml`; the default configuration (100 columns) applies. Do not
   re-wrap code by hand for looks.
 - Do not habitually run a full `cargo build --release` locally: the release profile is

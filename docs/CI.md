@@ -101,17 +101,24 @@ dtolnay/rust-toolchain):
 
 ```
 <os>-cargo-registry-<cachekey>-<hash(Cargo.lock)>
-<os>-rust-debug-<cachekey>-<hash(Cargo.lock)>
-<os>-rust-release-<cachekey>-<hash(Cargo.lock)>
+<os>-rust-debug-<target>-<cachekey>-<hash(Cargo.lock)>
 <os>-rust-release-<target>-<cachekey>-<hash(Cargo.lock)>
-<os>-rust-cross-<target>-<cachekey>-<hash(Cargo.lock)>
 ```
 
-The first three are host-triple and are written by `warm-cache.yml`; that is what keeps
-pull requests fast. The last two are per-target and are written by the jobs that read
-them — `build-binaries` (every nightly, and the release) and `cross-check`. They are
-worth it because nightly builds all six targets every day: the first run after a
-`Cargo.lock` change pays for the upload, every one after it restores.
+Three families, and the target triple is in the key of every one of them — the host jobs
+included, because `pr-check` passes `--target` explicitly even where it names the machine it
+is running on. `target/<triple>/…` is a path `warm-cache.yml` can fill in for another
+platform's job; `target/debug` could only ever be written by the very job that would have
+read it.
+
+That `--target` is what makes one writer possible, and there has to be exactly one: a cache
+written by a pull request is scoped to that pull request's merge ref, so the next pull
+request reports `Cache not found` for a key that was saved minutes earlier by a run with the
+same `Cargo.lock` and the same toolchain. Every job in `pr-check` is therefore a reader
+(`actions/cache/restore`), and the writing happens on `main`: `warm-cache.yml` builds the
+host debug and release entries for all three platforms plus the four debug entries that
+`cross-check` reads, and `build-binaries` writes `rust-release-<target>` on every nightly and
+every release — also from `main`.
 
 A few rules, each of which was written down after being learned the hard way:
 
@@ -122,15 +129,10 @@ A few rules, each of which was written down after being learned the hard way:
   target cache hit also means `cargo fetch` need not touch the network.
 - **`CARGO_INCREMENTAL=0`.** Incremental data is not part of the cached paths; leaving it on
   only makes the restored directory bigger and prints a "could not be used" warning.
-- **Every cache step either saves or shares.** `warm-cache.yml` uses `actions/cache`
-  (read + write) for the host-triple families, and `build-binaries` and `cross-check`
-  use it for their own per-target keys. Nothing uses `actions/cache/restore` alone: a
-  restore-only step is a cache that can never hit, and two of them sat in these
-  workflows described as if they worked.
-- GitHub caps each repository at 10 GB of caches and evicts **silently** by LRU when that is
-  exceeded, usually right before the pull request that needs the cache.
-  `cleanup-old-caches.yml` groups keys by "everything before the last `-`" (exactly the
-  `restore-keys` prefix) and keeps only the newest entry of each family.
+- **A pull request must never be the writer.** Its cache lives under `refs/pull/<n>/merge`:
+  no other pull request can restore it, and it is useless the moment the branch is deleted.
+  `warm-cache.yml` is a `push` to `main` for exactly this reason, and its keys are
+  byte-for-byte the ones the pull-request jobs ask for.
 
 ## Drift protection
 
@@ -193,9 +195,7 @@ docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:latest -color
 - **It does not test the toolchain for the Windows-arm64 cross build**:
   `aarch64-pc-windows-msvc` relies on the ARM64 MSVC toolchain that the `windows-latest` image
   ships, exactly as before this rework.
-- **It does not warm the release builds from `warm-cache.yml`**, because those caches
-  are per-target (`target/<triple>/release/`) and the builds that use them write them.
-  `nightly` builds all six targets daily, so nightly *is* the warmer; a release, which
-  bumps `Cargo.lock` and therefore misses the exact key, restores through
-  `restore-keys` and recompiles only the workspace crates. The cross-check keeps its
-  own debug caches for the same reason.
+- **It does not warm the cross-target release builds.** `warm-cache.yml` warms the host
+  release entries and the four cross-target *debug* ones; the release binaries for all six
+  targets come from `nightly`, which fills `rust-release-<target>` every day from `main`.
+  Warming them a second time would be the same six builds twice.
