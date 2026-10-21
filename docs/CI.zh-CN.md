@@ -83,9 +83,11 @@ ref 本来就不存在算成功：如果仓库开启了"自动删除头分支"�
 <os>-cargo-registry-<cachekey>-<hash(Cargo.lock)>
 <os>-rust-debug-<cachekey>-<hash(Cargo.lock)>
 <os>-rust-release-<cachekey>-<hash(Cargo.lock)>
-<os>-rust-release-<target>-<cachekey>-<hash(Cargo.lock)>
-<os>-rust-cross-<target>-<cachekey>-<hash(Cargo.lock)>
 ```
+
+三族全是宿主 triple——它们正是 `pr-check` 读的，也是 `warm-cache.yml` 唯一写的。
+路径为 `target/<triple>/…` 的缓存必须把 triple 写进键里，并且要在预热时就地构建那个
+目标；那是 release 构建的形状，而 release 是**刻意**冷跑的（见下）。
 
 几条规则，都是踩过才写下来的：
 
@@ -95,8 +97,9 @@ ref 本来就不存在算成功：如果仓库开启了"自动删除头分支"�
   走网络。
 - **`CARGO_INCREMENTAL=0`**。增量数据不在缓存路径里，开着只会让恢复出来的目录更大，
   并在恢复后打印一条 "could not be used" 警告。
-- **`warm-cache.yml` 用 `actions/cache`（读+写），PR 用 `actions/cache/restore`（只读），
-  两边键完全一致**——否则预热出来的是一套没人读的缓存。
+- **`warm-cache.yml` 是唯一的写方**。它用 `actions/cache`（读+写），其它工作流一律
+  `actions/cache/restore`（只读），所以它的键必须与 `pr-check` 逐字节一致——自己另起
+  一套键的预热只会写出一堆没人读的缓存。而一个没人写的只读键比没有缓存步骤更糟。
 - GitHub 对每个仓库的缓存有 10 GB 上限，超了就按 LRU **静默驱逐**，通常正好发生在需要它的
   那个 PR 之前。`cleanup-old-caches.yml` 按"键的最后一个 `-` 之前"分族（正好等于
   `restore-keys` 的前缀），每族只留最新一条。
@@ -153,3 +156,9 @@ docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:latest -color
   三处（清单、lock 文件、tag）不可能互相矛盾。
 - **不测 Windows-arm64 交叉构建的工具链**：`aarch64-pc-windows-msvc` 依赖
   `windows-latest` 镜像自带的 ARM64 MSVC 工具链，这一点和改造前一致。
+- **不预热 release 构建**。`build-binaries.yml` 显式带 `--target` 编译，产物落在
+  `target/<triple>/release/`，预热任务并不产出它；要预热就得自己再跑一套矩阵——每次
+  依赖变动多出六个交叉构建，只为省下一次手动触发、一年才几次的发版时间。何况
+  `publish` 会 bump `Cargo.lock`，精确键在需要它的那一刻早已失效。release 构建是冷
+  的，这是刻意的取舍。原先 `cross-check` 与 `build-binaries` 里的 per-target 缓存步骤
+  正是因此删掉的：没人写它们，只让工作流看起来比实际更暖。
