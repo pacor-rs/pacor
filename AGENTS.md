@@ -226,9 +226,9 @@ after that merges. A rule the repository's own automation ignores is not a rule.
   `Cargo.lock` follows, otherwise `--locked` builds fail.
 - Releases are dispatched, not tagged: **Publish Release** takes a `bump_type` and a
   channel, bumps the version on a temporary `release` branch, checks and builds that
-  branch, publishes a draft, and only then fast-forwards `main` and creates `vX`. Never
-  edit the version by hand, and never push a `v*` tag for a release — the tag is the
-  workflow's output.
+  branch, publishes a draft — which creates `vX` at that branch's head — and only then
+  fast-forwards `main` onto the same commit. Never edit the version by hand, and never
+  push a `v*` tag for a release — the tag is the workflow's output.
 - Never move a published tag and never hand-edit release assets — re-publish by dispatching
   `publish` again.
 - Workflows reference actions by **version** (`@v7`, `@v5`, `@v4`), never `@main`/`@latest`,

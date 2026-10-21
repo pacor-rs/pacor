@@ -15,7 +15,7 @@ because nothing happened" has to say so out loud.**
 | ---- | ---- | ---- |
 | `pr-check.yml` | PR → `main` (`crates/**`, `Cargo.toml`, `Cargo.lock`, `.cargo/**`, `.github/**`, `docs/**`, `*.md`) | `fmt` / `clippy` / `test` / release build on three platforms, a release-profile clippy pass, `cargo check` for four cross targets, actionlint, and the labelled auto-merge |
 | `build-binaries.yml` | called by `publish.yml` and `nightly.yml` via `workflow_call` | release binaries for six platforms: build, optional UPX, smoke test, package, `.sha256`, upload artifact |
-| `publish.yml` | manual dispatch: a version bump and channel, or an existing `tag` to re-publish | bump the version on a temporary `release` branch → check it → call `build-binaries` → create a draft release, upload, publish → fast-forward `main` and tag → delete the branch |
+| `publish.yml` | manual dispatch: a version bump and channel, or an existing `tag` to re-publish | bump the version on a temporary `release` branch → check it → call `build-binaries` → create a draft release at the release branch head, upload, publish → fast-forward `main` → delete the branch |
 | `nightly.yml` | every day at 04:00 UTC, or manual dispatch | build `main`, replace the `nightly` pre-release wholesale |
 | `warm-cache.yml` | Cargo file changes on `main`, Monday 05:00 UTC, manual dispatch | write the cargo registry and target caches ahead of time |
 | `cleanup-old-caches.yml` | Monday 00:00 UTC, or manual dispatch (`dry_run`) | keep only the newest entry of each cache family |
@@ -47,10 +47,13 @@ because nothing happened" has to say so out loud.**
 6. A pre-release channel additionally deletes the previous pre-releases: the updater only
    ever sees the newest one, and older ones on the page are invitations to install the wrong
    thing. Their tags stay, so the history is still reproducible.
-7. `merge-back` fast-forwards `main` to the bump commit and creates `vX` — **only** after the
-   release is public, and only if `main` has not moved in the meantime (a fast-forward that
-   fails means someone merged while the release was building). It refuses to tag when the
-   version is empty, because that is how a release gets tagged `v`.
+7. `merge-back` fast-forwards `main` onto the bump commit — **only** after the release is
+   public, and only if `main` has not moved in the meantime (a fast-forward that fails
+   means someone merged while the release was building). It does not create the tag:
+   the draft release did, at the head of the release branch, and `merge-back` refuses to
+   push unless `vX` and the commit `main` would land on are the same one. Tagging twice
+   is exactly how the first real release failed — fast-forward done, `main` unpushed,
+   and a published tag pointing at the tree *before* the bump.
 8. `cleanup` deletes the `release` branch on success; a failed run leaves it behind for
    whoever debugs it, and the next run force-pushes over it. A stable release also retires
    the `nightly` release and tag: people on the nightly are one command away from stable.

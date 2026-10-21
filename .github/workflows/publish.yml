@@ -381,7 +381,11 @@ jobs:
             echo "release ${TAG} exists; refreshing it"
             gh release edit "${TAG}" --title "${TAG}" --notes-file notes.md "${channel_args[@]}"
           else
-            gh release create "${TAG}" --draft --title "${TAG}" --notes-file notes.md "${channel_args[@]}"
+            # `--target` is not optional: without it the API creates the tag at the
+            # default branch's head, which is the tree *before* the bump, and the tag
+            # then disagrees with the version inside it.
+            gh release create "${TAG}" --draft --target "${RELEASE_BRANCH}" \
+              --title "${TAG}" --notes-file notes.md "${channel_args[@]}"
           fi
           gh release upload "${TAG}" dist/pacor-* SHA256SUMS --clobber
 
@@ -462,12 +466,24 @@ jobs:
           git config user.email 'github-actions[bot]@users.noreply.github.com'
 
           git fetch origin "refs/heads/${RELEASE_BRANCH}:refs/remotes/origin/${RELEASE_BRANCH}"
+          git fetch --tags --force origin
           git checkout -B "${base}" "origin/${base}"
           git merge --ff-only "origin/${RELEASE_BRANCH}"
 
-          git tag "v${VERSION}"
-          git push origin "${base}" "v${VERSION}"
-          echo "merged the bump into ${base} and tagged v${VERSION}"
+          # The tag already exists: the draft release created it at the release
+          # branch's head, which is the commit this fast-forward lands on. Creating it
+          # again here failed the first real release halfway — `fatal: tag
+          # 'v0.2.0-alpha.0' already exists` after the merge but before the push, so
+          # `main` kept the old version while the tag pointed at it anyway.
+          tagged="$(git rev-parse "refs/tags/v${VERSION}")"
+          landing="$(git rev-parse HEAD)"
+          if [[ "${tagged}" != "${landing}" ]]; then
+            echo "::error::v${VERSION} points at ${tagged}, but ${base} would move to ${landing}"
+            exit 1
+          fi
+
+          git push origin "${base}"
+          echo "fast-forwarded ${base} to v${VERSION}"
 
   # Only on success: a failed run leaves the branch behind so the next attempt (and whoever
   # is debugging it) can look at what was built. The next run force-pushes over it anyway.
@@ -543,8 +559,12 @@ jobs:
             echo ""
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if [[ "${{ needs.release.result }}" == "success" ]]; then
-            echo "Published: https://github.com/${GITHUB_REPOSITORY}/releases/tag/v${VERSION}" >> "$GITHUB_STEP_SUMMARY"
-          else
+          if [[ "${{ needs.release.result }}" != "success" ]]; then
             echo "The release failed or was cancelled; \`main\` was not touched." >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "${MODE}" == "bump" && "${{ needs.merge-back.result }}" != "success" ]]; then
+            echo "**Published, but \`main\` was not fast-forwarded.** \`v${VERSION}\` and \`main\` now disagree:" >> "$GITHUB_STEP_SUMMARY"
+            echo "the tag has the bump commit, \`main\` does not. Push \`main\` to \`v${VERSION}\` before the next release," >> "$GITHUB_STEP_SUMMARY"
+            echo "or that bump will be computed from the old version." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Published: https://github.com/${GITHUB_REPOSITORY}/releases/tag/v${VERSION}" >> "$GITHUB_STEP_SUMMARY"
           fi
