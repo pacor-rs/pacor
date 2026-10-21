@@ -1,47 +1,74 @@
 name: "PR Check"
 
+# A newer push to the same pull request supersedes the previous run: the older one
+# would otherwise keep a cache and a runner busy for a result nobody reads any more.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 on:
   pull_request:
     branches:
       - main
     paths:
-      - ".github/workflows/pr-check.yml"
+      # Everything that can change what CI has to say about a change belongs here. A
+      # pull request that only edits the workflows or the documentation used to start
+      # no workflow at all, so the first run it ever got was the release.
+      - ".github/**"
+      - ".cargo/**"
       - "crates/**"
+      - "docs/**"
+      - "*.md"
       - "Cargo.toml"
       - "Cargo.lock"
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Incremental data is not part of the cached paths, so leaving it on only makes the
+  # restored build directory bigger (and prints a "could not be used" warning).
+  CARGO_INCREMENTAL: 0
+
+# Least privilege by default; `auto-merge` asks for the write scopes it needs, and a
+# job-level block replaces this one rather than adding to it.
+permissions:
+  contents: read
 
 jobs:
+  # Decide which of the checks below are worth running.
   detect-changes:
     name: "Detect Changes"
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
-      pull-requests: read
       contents: read
+      pull-requests: read
     outputs:
-      core: ${{ steps.changes.outputs.core }}
+      code: ${{ steps.changes.outputs.code }}
       workflow: ${{ steps.changes.outputs.workflow }}
     steps:
-      - uses: actions/checkout@v6
-
-      - uses: dorny/paths-filter@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: changes
         with:
           filters: |
-            core:
+            code:
               - 'crates/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
+              - '.cargo/**'
             workflow:
-              - '.github/workflows/**'
+              - '.github/**'
 
+  # Every packaging backend compiles on every host, so this matrix type-checks the
+  # macOS and Windows backends even from Linux. The macOS and Windows entries are also
+  # where their platform-specific code is actually compiled and run.
   core-check:
     name: "Rust Code Check (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
     needs: detect-changes
-    if: needs.detect-changes.outputs.core == 'true' || needs.detect-changes.outputs.workflow == 'true'
+    if: needs.detect-changes.outputs.code == 'true' || needs.detect-changes.outputs.workflow == 'true'
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -49,49 +76,120 @@ jobs:
           - ubuntu-latest
           - macos-latest
           - windows-latest
-
-    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        id: rust-toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt, clippy
 
-      - name: Cache Rust dependencies
-        uses: actions/cache@v5
+      - name: Cache cargo registry
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
             ~/.cargo/bin/
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-registry-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache debug build
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            target/debug/.fingerprint
             target/debug/deps
             target/debug/build
-          key: ${{ runner.os }}-workspace-rust-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-rust-debug-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+          # The toolchain stays in the fallback prefix: artifacts built by another rustc
+          # are unusable (cargo's fingerprints include it), so restoring them only costs
+          # a large download. A toolchain update means one honest cold build instead.
           restore-keys: |
-            ${{ runner.os }}-workspace-rust-
+            ${{ runner.os }}-rust-debug-${{ steps.rust-toolchain.outputs.cachekey }}-
+
+      - name: Cache release build
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            target/release/.fingerprint
+            target/release/deps
+            target/release/build
+          key: ${{ runner.os }}-rust-release-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-release-${{ steps.rust-toolchain.outputs.cachekey }}-
 
       - name: Cargo fmt check
         run: cargo fmt --all -- --check
 
-      # Every packaging backend compiles on every host, so this single job
-      # type-checks the macOS and Windows backends even on Linux.
+      # `--all-targets` so test code is linted too, not only the libraries and binaries.
       - name: Cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Cargo test
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
-      - name: Cargo build
-        run: cargo build --workspace --release
+      - name: Cargo build (release)
+        run: cargo build --workspace --release --locked
 
-  cross-check:
-    name: "Cross-check other targets"
-    needs: detect-changes
-    if: needs.detect-changes.outputs.core == 'true' || needs.detect-changes.outputs.workflow == 'true'
+  # The release profile compiles different code: `panic = "abort"`, LTO and — the part
+  # that actually hides mistakes — `#[cfg(debug_assertions)]`, which gates the `trace`
+  # log level in `pacor-cli`. A dead-code or unused-import warning created by that gate
+  # never shows up in the debug pass above. Ubuntu only: the difference is not
+  # platform-specific, and this is the most expensive job in the file.
+  release-lints:
+    name: "Rust Lints (release profile)"
     runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.code == 'true' || needs.detect-changes.outputs.workflow == 'true'
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Rust
+        id: rust-toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-registry-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache release build
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            target/release/.fingerprint
+            target/release/deps
+            target/release/build
+          key: ${{ runner.os }}-rust-release-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-release-${{ steps.rust-toolchain.outputs.cachekey }}-
+
+      - name: Cargo clippy (release)
+        run: cargo clippy --workspace --all-targets --release --locked -- -D warnings
+
+  # No C dependencies (compression uses the pure-Rust `zlib-rs` backend), so the other
+  # targets can be checked without any cross toolchain — far earlier than the release
+  # matrix would notice a `cfg(windows)`-only mistake.
+  cross-check:
+    name: "Cross-check ${{ matrix.target }}"
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.code == 'true' || needs.detect-changes.outputs.workflow == 'true'
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -99,32 +197,110 @@ jobs:
           - x86_64-pc-windows-msvc
           - x86_64-apple-darwin
           - aarch64-apple-darwin
-
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        id: rust-toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Cache Rust dependencies
-        uses: actions/cache@v5
+      - name: Cache cargo registry
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
+            ~/.cargo/bin/
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-registry-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache target build
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            target/${{ matrix.target }}/debug/.fingerprint
             target/${{ matrix.target }}/debug/deps
             target/${{ matrix.target }}/debug/build
-          key: ${{ runner.os }}-${{ matrix.target }}-rust-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-rust-cross-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.target }}-rust-
+            ${{ runner.os }}-rust-cross-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-
 
-      # No C dependencies, so this needs no cross toolchain; it catches
-      # platform-specific regressions far earlier than the release matrix.
-      # (RUSTFLAGS rather than `-- -D warnings`: cargo check takes no rustc args.)
+      # `RUSTFLAGS` rather than `-- -D warnings`: `cargo check` takes no rustc arguments.
       - name: Cargo check for target
         env:
           RUSTFLAGS: "-D warnings"
-        run: cargo check --workspace --all-targets --target ${{ matrix.target }}
+        run: cargo check --workspace --all-targets --locked --target ${{ matrix.target }}
+
+  # A typo in a workflow is otherwise only noticed when it fails to run — a gate that
+  # never fires because its `if:` names the wrong job looks exactly like a passing one.
+  workflow-lint:
+    name: "Workflow Lint"
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.workflow == 'true'
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The release binary rather than the `rhysd/actionlint` image: no registry
+      # round-trip, and the download is checked against the checksums file published
+      # next to it, which an image tag cannot express.
+      - name: Install actionlint
+        env:
+          VERSION: "1.7.7"
+        run: |
+          set -euo pipefail
+          base="https://github.com/rhysd/actionlint/releases/download/v${VERSION}"
+          curl -sSfL -O "${base}/actionlint_${VERSION}_linux_amd64.tar.gz"
+          curl -sSfL -O "${base}/actionlint_${VERSION}_checksums.txt"
+          grep " actionlint_${VERSION}_linux_amd64.tar.gz$" "actionlint_${VERSION}_checksums.txt" | sha256sum -c -
+          tar -xzf "actionlint_${VERSION}_linux_amd64.tar.gz" actionlint
+          ./actionlint --version
+
+      # Only warnings and errors are gated: `-S info` also flags deliberate style
+      # choices, and the release workflows rely on a few of those on purpose. The
+      # shellcheck pass uses the runner's own binary (present on `ubuntu-latest`) and
+      # degrades to actionlint alone rather than failing when it is not.
+      - name: Lint the workflows
+        run: |
+          set -euo pipefail
+          if command -v shellcheck >/dev/null 2>&1; then
+            ./actionlint -color -shellcheck 'shellcheck -S warning'
+          else
+            echo "shellcheck is not installed; linting without the shell pass"
+            ./actionlint -color
+          fi
+
+  # Merging by hand is the only step left after CI is green on a one-line fix, so a
+  # pull request labelled `automerge` is merged as soon as no executed check failed.
+  # A skipped check (nothing relevant changed) is fine; a failed or cancelled one is
+  # not, which is why the `needs` results are spelled out instead of `success()`.
+  auto-merge:
+    name: "Auto Merge"
+    runs-on: ubuntu-latest
+    needs: [detect-changes, core-check, release-lints, cross-check, workflow-lint]
+    # Same-repository branches only: a pull request from a fork gets a read-only token,
+    # so it could not merge even if it should.
+    if: >-
+      always() && !cancelled()
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && needs.detect-changes.result == 'success'
+      && (needs.core-check.result == 'success' || needs.core-check.result == 'skipped')
+      && (needs.release-lints.result == 'success' || needs.release-lints.result == 'skipped')
+      && (needs.cross-check.result == 'success' || needs.cross-check.result == 'skipped')
+      && (needs.workflow-lint.result == 'success' || needs.workflow-lint.result == 'skipped')
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Auto merge PR
+        uses: pascalgn/automerge-action@7961b8b5eec56cc088c140b56d864285eabd3f67 # v0.16.4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MERGE_LABELS: "automerge"
+          MERGE_REMOVE_LABELS: "automerge"

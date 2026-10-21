@@ -1,0 +1,111 @@
+name: "Cache Warming"
+
+# The caches are keyed by the resolved toolchain plus `Cargo.lock`, so a dependency
+# bump or a toolchain update invalidates all of them at once — and every pull request
+# that arrives next then compiles the whole workspace from scratch. Building the caches
+# here, ahead of time, keeps the first pull request after such a change as fast as the
+# tenth.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**/Cargo.toml"
+      - ".github/workflows/warm-cache.yml"
+  workflow_dispatch:
+  schedule:
+    # Monday 05:00 UTC (13:00 Beijing time). A `stable` release changes the toolchain
+    # without touching any file the filters above watch, so without a periodic run the
+    # newest caches would belong to the previous compiler.
+    - cron: "0 5 * * 1"
+
+# Two warmings at once would race to save the same cache keys; the newer one wins, so
+# the stale run is not worth finishing.
+concurrency:
+  group: warm-cache
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+permissions:
+  contents: read
+
+jobs:
+  warm:
+    name: "Warm caches (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Rust
+        id: rust-toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+
+      # `actions/cache` rather than `actions/cache/restore`: this job exists to *write*
+      # the entries the pull-request jobs only read. The keys are byte-for-byte the ones
+      # pr-check.yml uses, otherwise warming would create a parallel set nothing reads.
+      - name: Cache cargo registry
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-registry-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache debug build
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            target/debug/.fingerprint
+            target/debug/deps
+            target/debug/build
+          key: ${{ runner.os }}-rust-debug-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-debug-${{ steps.rust-toolchain.outputs.cachekey }}-
+
+      - name: Cache release build
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            target/release/.fingerprint
+            target/release/deps
+            target/release/build
+          key: ${{ runner.os }}-rust-release-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-release-${{ steps.rust-toolchain.outputs.cachekey }}-
+
+      - name: Fetch dependencies
+        run: cargo fetch --locked
+
+      # Exactly the commands the pull-request jobs run, so the fingerprints they look
+      # for are the ones that exist. Clippy writes its own (per-lint) fingerprints; a
+      # plain `cargo build` would not warm them.
+      - name: Build and lint
+        run: |
+          cargo build --workspace --tests --locked
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo build --workspace --release --locked
+
+      # The release lint pass only runs on Linux in CI, so only Linux pays for it here.
+      - name: Lint the release profile
+        if: runner.os == 'Linux'
+        run: cargo clippy --workspace --all-targets --release --locked -- -D warnings

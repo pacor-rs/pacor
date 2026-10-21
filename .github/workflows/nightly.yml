@@ -1,0 +1,202 @@
+name: "Nightly Build"
+
+# Nobody notices that a release broke until it is tagged, so `main` is built every day
+# and published as the moving `nightly` pre-release. It is replaced wholesale on each
+# run — same tag, same assets, new commit — because the point is "the latest commit
+# that still compiles", not a history of nightlies.
+on:
+  schedule:
+    # 04:00 UTC (12:00 Beijing time)
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+# Least privilege by default; `publish` asks for the write scope it needs.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: "Check whether anything new needs building"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      sha: ${{ steps.check.outputs.sha }}
+      short_sha: ${{ steps.check.outputs.short_sha }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Check the build conditions
+        id: check
+        run: |
+          set -euo pipefail
+
+          sha=$(git rev-parse HEAD)
+          short_sha=$(git rev-parse --short HEAD)
+          version=$(sed -n '/^\[workspace\.package\]$/,/^\[/p' Cargo.toml | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n1)
+
+          should_build=true
+
+          # Nothing to do if last night's binary already came from this commit.
+          if git rev-parse -q --verify refs/tags/nightly >/dev/null; then
+            if [[ "$(git rev-list -n1 nightly)" == "${sha}" ]]; then
+              echo "the nightly tag already points at ${short_sha}; skipping"
+              should_build=false
+            fi
+          fi
+
+          # A commit that carries a release tag is already published; a nightly built
+          # from it would only duplicate the assets.
+          if [[ -n "$(git tag --points-at HEAD | grep -E '^v' || true)" ]]; then
+            echo "${short_sha} is a release tag; the release workflow owns it"
+            should_build=false
+          fi
+
+          echo "should_build=${should_build}" >> "$GITHUB_OUTPUT"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: "Build"
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
+    uses: ./.github/workflows/build-binaries.yml
+    permissions:
+      contents: read
+    with:
+      ref: ${{ needs.check.outputs.sha }}
+      # A nightly is superseded within a day; there is no reason to keep its
+      # intermediate artifacts around.
+      retention_days: 1
+
+  publish:
+    name: "Publish the nightly"
+    needs: [check, build]
+    if: needs.check.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Download the binaries
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Assemble the release notes
+        env:
+          SHORT_SHA: ${{ needs.check.outputs.short_sha }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          {
+            printf '> **This is a nightly build, not a release.** It is rebuilt from `main`\n'
+            printf '> every day and may be broken. Use a tagged release unless you are testing\n'
+            printf '> something specific.\n\n'
+            printf '| | |\n'
+            printf '| --- | --- |\n'
+            printf '| Commit | `%s` |\n' "${SHORT_SHA}"
+            printf '| Version | `%s` |\n' "${VERSION}"
+            printf '| Built | %s |\n\n' "$(date -u '+%Y-%m-%d %H:%M UTC')"
+            printf '### Downloads\n\n'
+            for asset in dist/pacor-*; do
+              [[ -f "${asset}" ]] || continue
+              case "${asset}" in
+                *.sha256) continue ;;
+              esac
+              printf -- '- `%s`\n' "$(basename "${asset}")"
+            done
+            printf '\n`SHA256SUMS` lists every asset for `sha256sum -c`.\n'
+          } > notes.md
+
+          cat dist/*.sha256 > SHA256SUMS
+          cat notes.md
+
+      - name: Replace the nightly release and its tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHORT_SHA: ${{ needs.check.outputs.short_sha }}
+          SHA: ${{ needs.check.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          # Deleting first keeps the tag and the assets at the same commit: an upload
+          # that fails halfway leaves a release that is obviously incomplete instead of
+          # a mix of yesterday's and today's binaries.
+          if gh release view nightly >/dev/null 2>&1; then
+            gh release delete nightly --cleanup-tag --yes
+          fi
+
+          gh release create nightly \
+            --draft \
+            --prerelease \
+            --latest=false \
+            --title "Nightly ${SHORT_SHA} ($(date -u '+%Y-%m-%d'))" \
+            --notes-file notes.md \
+            --target "${SHA}"
+
+          gh release upload nightly dist/pacor-* SHA256SUMS --clobber
+          # Published only once the assets are there, so the tag never points at a
+          # release with nothing in it.
+          gh release edit nightly --draft=false
+          echo "published nightly for ${SHORT_SHA}"
+
+      - name: Create a build summary
+        if: always()
+        env:
+          SHORT_SHA: ${{ needs.check.outputs.short_sha }}
+          COMMIT: ${{ needs.check.outputs.sha }}
+          TRIGGER: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          {
+            echo "## 🌙 Nightly ${SHORT_SHA}"
+            echo ""
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Commit | \`${COMMIT}\` |"
+            echo "| Triggered by | ${TRIGGER} |"
+            echo ""
+            echo "[View the nightly release](https://github.com/${REPOSITORY}/releases/tag/nightly)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Says why nothing ran, so a green nightly that built nothing is not mistaken for a
+  # green nightly that verified everything.
+  skip:
+    name: "Nothing to build"
+    needs: check
+    if: needs.check.outputs.should_build != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Create a skip summary
+        env:
+          COMMIT: ${{ needs.check.outputs.sha }}
+        run: |
+          {
+            echo "## ⏭️ Nightly build skipped"
+            echo ""
+            echo "No commits to build since the last nightly, or \`main\` is at a release tag."
+            echo ""
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Commit | \`${COMMIT}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

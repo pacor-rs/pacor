@@ -1,0 +1,211 @@
+name: "Build Binaries"
+
+# One place that knows how a pacor binary is built, packed and checksummed, so the
+# release and the nightly build cannot drift apart: a platform added here appears in
+# both, and a fix to the packaging lands in both.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Commit, tag or branch to build (empty: the caller's ref)"
+        required: false
+        type: string
+        default: ""
+      retention_days:
+        description: "How long the intermediate artifacts are kept"
+        required: false
+        type: number
+        default: 3
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    name: "${{ matrix.platform.name }}"
+    runs-on: ${{ matrix.platform.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: macOS-x64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            binary: pacor
+            compress: false
+          - name: macOS-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            binary: pacor
+            compress: false
+
+          - name: Linux-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: pacor
+            compress: true
+          - name: Linux-arm64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            binary: pacor
+            compress: true
+
+          - name: Windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: pacor.exe
+            compress: true
+          - name: Windows-arm64
+            os: windows-latest
+            target: aarch64-pc-windows-msvc
+            binary: pacor.exe
+            compress: true
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Setup Rust
+        id: rust-toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: ${{ matrix.platform.target }}
+
+      - name: Cache cargo registry
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-registry-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache release build
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            target/${{ matrix.platform.target }}/release/.fingerprint
+            target/${{ matrix.platform.target }}/release/deps
+            target/${{ matrix.platform.target }}/release/build
+          key: ${{ runner.os }}-rust-release-${{ matrix.platform.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-release-${{ matrix.platform.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+
+      # The only target that needs a linker this runner does not ship.
+      - name: Install the ARM64 linker
+        if: matrix.platform.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: cargo build --workspace --release --locked --target ${{ matrix.platform.target }}
+
+      # macOS is deliberately left alone: UPX cannot produce a Mach-O binary that the
+      # platform will happily run, and the compressed size is not worth the risk there.
+      - name: Install UPX (Linux)
+        if: matrix.platform.compress && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y upx-ucl
+
+      - name: Install UPX (Windows)
+        if: matrix.platform.compress && runner.os == 'Windows'
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/upx/upx/releases/download/v4.2.1/upx-4.2.1-win64.zip" -OutFile upx.zip
+          Expand-Archive -Path upx.zip -DestinationPath .
+          Move-Item upx-4.2.1-win64/upx.exe upx.exe
+
+      # A compression failure is not worth failing a release over: the binary is
+      # correct either way, it is just bigger.
+      - name: Compress
+        if: matrix.platform.compress
+        shell: bash
+        env:
+          TARGET: ${{ matrix.platform.target }}
+          BINARY: ${{ matrix.platform.binary }}
+        run: |
+          set -euo pipefail
+          binary_path="target/${TARGET}/release/${BINARY}"
+          echo "before: $(du -h "${binary_path}" | cut -f1)"
+
+          compress() {
+            if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+              ./upx.exe --best --lzma "${binary_path}"
+            else
+              upx --best --lzma "${binary_path}"
+            fi
+          }
+
+          if ! compress; then
+            echo "::warning::UPX could not compress ${BINARY}; publishing it uncompressed"
+          fi
+
+          echo "after: $(du -h "${binary_path}" | cut -f1)"
+
+      # A cross-built binary cannot be executed here, so the smoke test only runs where
+      # the target is the host — and a packaging bug that swapped the files would show
+      # up as a `--version` that does not print the expected name.
+      - name: Smoke test the binary
+        shell: bash
+        env:
+          TARGET: ${{ matrix.platform.target }}
+          BINARY: ${{ matrix.platform.binary }}
+        run: |
+          set -euo pipefail
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          if [[ "${TARGET}" != "${host}" ]]; then
+            echo "cross-compiled (${TARGET} on ${host}); skipping the execution test"
+            exit 0
+          fi
+
+          binary_path="target/${TARGET}/release/${BINARY}"
+          test -f "${binary_path}" || { echo "::error::${binary_path} does not exist"; exit 1; }
+          "${binary_path}" --version
+
+      - name: Package and checksum
+        shell: bash
+        env:
+          TARGET: ${{ matrix.platform.target }}
+          BINARY: ${{ matrix.platform.binary }}
+          PLATFORM: ${{ matrix.platform.name }}
+        run: |
+          set -euo pipefail
+          workspace="${PWD}"
+
+          # A flat archive: whoever extracts it gets the binary, not the whole
+          # `target/<triple>/release/` path it happened to be built in.
+          if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+            asset="pacor-${PLATFORM}.zip"
+            ( cd "target/${TARGET}/release" && 7z a -bso0 -bsp0 "${workspace}/${asset}" "${BINARY}" )
+          else
+            asset="pacor-${PLATFORM}.tar.gz"
+            tar -czf "${asset}" -C "target/${TARGET}/release" "${BINARY}"
+          fi
+
+          # `sha256sum` format, so `sha256sum -c pacor-*.sha256` works for whoever
+          # downloaded it, on any platform.
+          sha256sum "${asset}" > "${asset}.sha256"
+          cat "${asset}.sha256"
+
+      - name: Upload the artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.platform.name }}
+          path: |
+            pacor-*.zip
+            pacor-*.tar.gz
+            pacor-*.sha256
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}

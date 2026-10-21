@@ -1,248 +1,218 @@
-name: Build and Publish Release
+name: "Publish Release"
 
+# Release from a tag, not from a branch: the tag is what the version in `Cargo.toml`
+# names, and the `verify` job below refuses to build one that disagrees. Dispatching
+# this workflow by hand re-publishes an existing tag (a broken asset, a failed upload)
+# without inventing a new version.
 on:
-    push:
-        tags:
-            - "v*"
-    workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish, e.g. v0.2.0"
+        required: true
+        type: string
+
+# A release must never be cancelled halfway through an upload: re-running it for the
+# same tag is the way out of a bad state, and that run has to queue behind this one.
+concurrency:
+  group: publish-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 env:
-    CARGO_TERM_COLOR: always
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+# Least privilege by default; the `release` job asks for the write scope it needs.
+permissions:
+  contents: read
 
 jobs:
-    build:
-        name: Build ${{ matrix.platform.name }}
-        runs-on: ${{ matrix.platform.os }}
-        strategy:
-            fail-fast: false
-            matrix:
-                platform:
-                    # macOS builds
-                    - name: macOS-x64
-                      os: macos-latest
-                      target: x86_64-apple-darwin
-                      binary: pacor
-                      compress: false
-                    - name: macOS-arm64
-                      os: macos-latest
-                      target: aarch64-apple-darwin
-                      binary: pacor
-                      compress: false
+  # Fails in a minute instead of after six runners have built binaries for a tag that
+  # does not match the workspace version.
+  verify:
+    name: "Verify the tag matches the workspace version"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
 
-                    # Linux builds
-                    - name: Linux-x64
-                      os: ubuntu-latest
-                      target: x86_64-unknown-linux-gnu
-                      binary: pacor
-                      compress: true
-                    - name: Linux-arm64
-                      os: ubuntu-latest
-                      target: aarch64-unknown-linux-gnu
-                      binary: pacor
-                      compress: true
+      - name: Check the version
+        id: version
+        run: |
+          set -euo pipefail
 
-                    # Windows builds
-                    - name: Windows-x64
-                      os: windows-latest
-                      target: x86_64-pc-windows-msvc
-                      binary: pacor.exe
-                      compress: true
-                    - name: Windows-arm64
-                      os: windows-latest
-                      target: aarch64-pc-windows-msvc
-                      binary: pacor.exe
-                      compress: true
+          # `version` lives in `[workspace.package]`; every crate inherits it. The
+          # stream is normalised first: a CRLF checkout would otherwise stop the sed
+          # range from matching at all, and the error would look like a missing key.
+          version=$(tr -d '\r' < Cargo.toml | sed -n '/^\[workspace\.package\]$/,/^\[/p' | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n1)
+          if [[ -z "${version}" ]]; then
+            echo "::error::could not read [workspace.package] version from Cargo.toml"
+            exit 1
+          fi
 
-        steps:
-            - name: Checkout repository
-              uses: actions/checkout@v4
+          if [[ "v${version}" != "${TAG}" ]]; then
+            echo "::error::tag ${TAG} does not match the workspace version v${version}; bump the version first (see .github/workflows/bump.yml)"
+            exit 1
+          fi
 
-            - name: Setup Rust
-              uses: dtolnay/rust-toolchain@stable
-              with:
-                  targets: ${{ matrix.platform.target }}
+          # A build that finds the lock file stale fails on its own (`--locked` below and
+          # in build-binaries.yml), so nothing else has to be resolved here.
 
-            - name: Setup Rust cache
-              uses: Swatinem/rust-cache@v2
-              with:
-                  key: ${{ matrix.platform.target }}
+          # `0.1.0-alpha` and friends are published as pre-releases, which also keeps
+          # them off the "latest release" slot that the updater and the badge read.
+          if [[ "${version}" == *-* ]]; then
+            prerelease=true
+          else
+            prerelease=false
+          fi
 
-            - name: Install cross-compilation dependencies (Linux ARM64)
-              if: matrix.platform.os == 'ubuntu-latest' && matrix.platform.target == 'aarch64-unknown-linux-gnu'
-              run: |
-                  sudo apt-get update
-                  sudo apt-get install -y gcc-aarch64-linux-gnu
-                  echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+          echo "publishing ${TAG} (pre-release: ${prerelease})"
 
-            - name: Build release binary
-              run: |
-                  cargo build --release --target ${{ matrix.platform.target }}
+  # The same six-platform build the nightly uses.
+  build:
+    name: "Build"
+    needs: verify
+    uses: ./.github/workflows/build-binaries.yml
+    permissions:
+      contents: read
+    with:
+      ref: ${{ needs.verify.outputs.tag }}
 
-            - name: Install UPX (Linux)
-              if: matrix.platform.compress && matrix.platform.os == 'ubuntu-latest'
-              run: |
-                  sudo apt-get update
-                  sudo apt-get install -y upx-ucl
+  release:
+    name: "Publish ${{ needs.verify.outputs.tag }}"
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.tag }}
+          fetch-depth: 0
 
-            - name: Install UPX (Windows)
-              if: matrix.platform.compress && matrix.platform.os == 'windows-latest'
-              run: |
-                  # Download and install UPX
-                  Invoke-WebRequest -Uri "https://github.com/upx/upx/releases/download/v4.2.1/upx-4.2.1-win64.zip" -OutFile "upx.zip"
-                  Expand-Archive -Path "upx.zip" -DestinationPath "."
-                  Move-Item "upx-4.2.1-win64\upx.exe" "upx.exe"
+      - name: Download the binaries
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          merge-multiple: true
 
-            - name: Compress binary with UPX (Linux/Windows)
-              if: matrix.platform.compress
-              shell: bash
-              run: |
-                  binary_path="target/${{ matrix.platform.target }}/release/${{ matrix.platform.binary }}"
-                  echo "Original binary size: $(du -h "$binary_path" | cut -f1)"
+      - name: Determine the changelog range
+        id: range
+        run: |
+          set -euo pipefail
+          # The previous *stable* tag: a nightly tag is a moving target and would make
+          # the range cover the same commits twice.
+          previous=$(git describe --tags --abbrev=0 --exclude=nightly "${TAG}^" 2>/dev/null || true)
+          if [[ -z "${previous}" ]]; then
+            previous=$(git rev-list --max-parents=0 HEAD)
+            echo "no earlier tag; the changelog starts at the root commit ${previous}"
+          fi
+          echo "from=${previous}" >> "$GITHUB_OUTPUT"
 
-                  if [[ "${{ matrix.platform.os }}" == "windows-latest" ]]; then
-                    ./upx.exe --best --lzma "$binary_path" || {
-                      echo "UPX compression failed, continuing with uncompressed binary"
-                      echo "COMPRESSION_FAILED=true" >> $GITHUB_ENV
-                    }
-                  else
-                    upx --best --lzma "$binary_path" || {
-                      echo "UPX compression failed, continuing with uncompressed binary"
-                      echo "COMPRESSION_FAILED=true" >> $GITHUB_ENV
-                    }
-                  fi
+      - name: Build the changelog
+        id: changelog
+        uses: mikepenz/release-changelog-builder-action@32e3c96f29a6532607f638797455e9e98cfc703d # v4.2.2
+        with:
+          configuration: ".github/changelog-configuration.json"
+          fromTag: ${{ steps.range.outputs.from }}
+          toTag: ${{ needs.verify.outputs.tag }}
+          # A repository without pull-request labels still has commits to list, and the
+          # fallback below is what turns them into notes.
+          failOnError: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-                  echo "Final binary size: $(du -h "$binary_path" | cut -f1)"
+      - name: Assemble the release notes
+        env:
+          CHANGELOG: ${{ steps.changelog.outputs.changelog }}
+          FROM: ${{ steps.range.outputs.from }}
+        run: |
+          set -euo pipefail
 
-            - name: Validate binary
-              shell: bash
-              run: |
-                  binary_path="target/${{ matrix.platform.target }}/release/${{ matrix.platform.binary }}"
-                  if [[ ! -f "$binary_path" ]]; then
-                    echo "Error: Binary not found at $binary_path"
-                    exit 1
-                  fi
+          # The action needs pull-request labels to group anything; a repository that
+          # merges without them gets the commit list instead of an empty section.
+          if [[ -n "${CHANGELOG}" && "${CHANGELOG}" != "No changes" ]]; then
+            printf '%s\n' "${CHANGELOG}" > notes.md
+          else
+            printf '## Changes\n\n' > notes.md
+            git log --pretty='- %s' "${FROM}..${TAG}" >> notes.md
+          fi
 
-                  # Test that the binary can be executed (at least shows help)
-                  if [[ "${{ matrix.platform.os }}" != "ubuntu-latest" || "${{ matrix.platform.target }}" == "x86_64-unknown-linux-gnu" ]]; then
-                    echo "Testing binary execution..."
-                    if [[ "${{ matrix.platform.os }}" == "windows-latest" ]]; then
-                      "$binary_path" --version || "$binary_path" --help || echo "Binary execution test completed"
-                    else
-                      "$binary_path" --version || "$binary_path" --help || echo "Binary execution test completed"
-                    fi
-                  fi
+          {
+            printf '\n### Downloads\n\n'
+            for asset in dist/pacor-*; do
+              [[ -f "${asset}" ]] || continue
+              case "${asset}" in
+                *.sha256) continue ;;
+              esac
+              printf -- '- `%s`\n' "$(basename "${asset}")"
+            done
+            printf '\nEach archive has a `.sha256` next to it, and `SHA256SUMS` lists every\n'
+            printf 'asset in a form `sha256sum -c SHA256SUMS` accepts.\n'
+          } >> notes.md
 
-            - name: Calculate file hash
-              id: hash
-              shell: bash
-              run: |
-                  if [[ "${{ matrix.platform.os }}" == "windows-latest" ]]; then
-                    hash=$(powershell -command "(Get-FileHash target/${{ matrix.platform.target }}/release/${{ matrix.platform.binary }} -Algorithm SHA256).Hash.ToLower()")
-                  else
-                    hash=$(shasum -a 256 target/${{ matrix.platform.target }}/release/${{ matrix.platform.binary }} | cut -d ' ' -f 1)
-                  fi
-                  echo "hash=$hash" >> $GITHUB_OUTPUT
+          # One combined checksum file is easier to fetch than six separate ones, and it
+          # is what a package manifest (winget, Scoop, Homebrew) wants anyway.
+          cat dist/*.sha256 > SHA256SUMS
+          echo "--- notes.md ---"
+          cat notes.md
 
-            - name: Create archive
-              shell: bash
-              run: |
-                  binary_name="pacor-${{ matrix.platform.name }}"
-                  if [[ "${{ matrix.platform.os }}" == "windows-latest" ]]; then
-                    7z a "${binary_name}.zip" "./target/${{ matrix.platform.target }}/release/${{ matrix.platform.binary }}"
-                    echo "ASSET=${binary_name}.zip" >> $GITHUB_ENV
-                  else
-                    tar -czf "${binary_name}.tar.gz" -C "target/${{ matrix.platform.target }}/release" "${{ matrix.platform.binary }}"
-                    echo "ASSET=${binary_name}.tar.gz" >> $GITHUB_ENV
-                  fi
+      # Draft first: a build that fails to upload must not leave a half-populated release
+      # that the "latest" badge and the updater would happily point at.
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+        run: |
+          set -euo pipefail
 
-            - name: Upload artifact
-              uses: actions/upload-artifact@v4
-              with:
-                  name: ${{ matrix.platform.name }}
-                  path: ${{ env.ASSET }}
-                  retention-days: 1
+          if [[ "${PRERELEASE}" == "true" ]]; then
+            channel_args=(--prerelease --latest=false)
+          else
+            channel_args=(--latest)
+          fi
 
-            - name: Create release info
-              shell: bash
-              run: |
-                  echo "**${{ matrix.platform.name }}**" >> release_info.txt
-                  echo "SHA256: ${{ steps.hash.outputs.hash }}" >> release_info.txt
-                  if [[ "${{ matrix.platform.compress }}" == "true" ]]; then
-                    if [[ "$COMPRESSION_FAILED" == "true" ]]; then
-                      echo "Compression: Failed (uncompressed binary)" >> release_info.txt
-                    else
-                      echo "Compression: UPX --best --lzma (~60% size reduction)" >> release_info.txt
-                    fi
-                  else
-                    echo "Compression: Not applied (macOS)" >> release_info.txt
-                  fi
-                  echo "" >> release_info.txt
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "release ${TAG} exists; replacing its notes and assets"
+            gh release edit "${TAG}" --title "${TAG}" --notes-file notes.md "${channel_args[@]}"
+          else
+            gh release create "${TAG}" --draft --title "${TAG}" --notes-file notes.md "${channel_args[@]}"
+          fi
 
-            - name: Upload release info
-              uses: actions/upload-artifact@v4
-              with:
-                  name: release-info-${{ matrix.platform.name }}
-                  path: release_info.txt
-                  retention-days: 1
+          gh release upload "${TAG}" dist/pacor-* SHA256SUMS --clobber
+          gh release edit "${TAG}" --draft=false
 
-    release:
-        name: Create Release
-        needs: build
-        runs-on: ubuntu-latest
-        if: startsWith(github.ref, 'refs/tags/')
-        steps:
-            - name: Checkout repository
-              uses: actions/checkout@v4
-
-            - name: Download all artifacts
-              uses: actions/download-artifact@v4
-
-            - name: Combine release info
-              run: |
-                  echo "# Release Information" > combined_release_info.md
-                  echo "" >> combined_release_info.md
-                  echo "## Binary Checksums" >> combined_release_info.md
-                  echo "" >> combined_release_info.md
-                  for info_dir in release-info-*/; do
-                    if [ -d "$info_dir" ]; then
-                      cat "$info_dir/release_info.txt" >> combined_release_info.md
-                    fi
-                  done
-
-            - name: Build changelog
-              id: github_release_changelog
-              uses: mikepenz/release-changelog-builder-action@v4
-              with:
-                  configuration: ".github/changelog-configuration.json"
-                  toTag: "refs/heads/main"
-                  failOnError: true
-              env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-            - name: Create Release
-              run: |
-                  # Save changelog to file to handle special characters properly
-                  cat > release_notes.md << 'EOF'
-                  ${{ steps.github_release_changelog.outputs.changelog }}
-                  EOF
-
-                  gh release create "${{ github.ref_name }}" \
-                    --title "${{ github.ref_name }}" \
-                    --notes-file release_notes.md
-              env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-            - name: Upload Release Assets
-              run: |
-                  for platform in macOS-x64 macOS-arm64 Linux-x64 Linux-arm64 Windows-x64 Windows-arm64; do
-                    if [ -d "$platform" ]; then
-                      for file in "$platform"/*; do
-                        if [ -f "$file" ]; then
-                          echo "Uploading $file"
-                          gh release upload "${{ github.ref_name }}" "$file" --clobber
-                        fi
-                      done
-                    fi
-                  done
-              env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create a release summary
+        if: always()
+        env:
+          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+          ACTOR: ${{ github.actor }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          {
+            echo "## 🚀 ${TAG}"
+            echo ""
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Version | \`${RELEASE_VERSION}\` |"
+            echo "| Pre-release | \`${PRERELEASE}\` |"
+            echo "| Triggered by | @${ACTOR} |"
+            echo ""
+            echo "[View the release](https://github.com/${REPOSITORY}/releases/tag/${TAG})"
+          } >> "$GITHUB_STEP_SUMMARY"

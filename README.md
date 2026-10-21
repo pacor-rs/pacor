@@ -287,6 +287,19 @@ cargo check --workspace --target x86_64-apple-darwin
 cargo check --workspace --target aarch64-apple-darwin
 ```
 
+## Continuous integration
+
+Seven workflows under `.github/workflows` cover the checks, the release and cache
+housekeeping; **[docs/CI.md](docs/CI.md)** describes each of them, the release
+procedure and the caching scheme.
+
+In short: a pull request runs `fmt`, `clippy`, the test suite and a release build on
+Linux, macOS and Windows, plus a release-profile lint pass (the `#[cfg(debug_assertions)]`
+code path) and three cross-target `cargo check` runs; a `v*` tag is published with six
+binaries, per-asset `.sha256` files and a combined `SHA256SUMS`; `main` is rebuilt every
+day as the `nightly` pre-release. `Bump Version` does the version bump, the `Cargo.lock`
+sync and the tagging, so the tag and the manifest cannot disagree.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

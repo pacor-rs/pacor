@@ -234,6 +234,17 @@ cargo check --workspace --target x86_64-apple-darwin
 cargo check --workspace --target aarch64-apple-darwin
 ```
 
+## 持续集成与发布
+
+`.github/workflows` 下有七个工作流，分别负责检查、发布与缓存维护；
+**[docs/CI.md](docs/CI.md)** 逐个说明它们什么时候跑、跑什么，以及发版流程。
+
+简述：PR 会在 Linux、macOS、Windows 上跑 `fmt`、`clippy`、测试与 release 构建，另外还有一次
+release profile 的 lint（`#[cfg(debug_assertions)]` 那段代码）与三个交叉目标的
+`cargo check`；推送 `v*` tag 会产出六个平台的二进制、每个资产的 `.sha256` 与汇总的
+`SHA256SUMS`；`main` 每天重新构建为 `nightly` 预发布。`Bump Version` 负责改版本号、
+同步 `Cargo.lock` 并打 tag，因此 tag 与清单不可能对不上。
+
 ## 许可证
 
 本项目采用 MIT 许可证 - 详情请见 [LICENSE](LICENSE) 文件。
