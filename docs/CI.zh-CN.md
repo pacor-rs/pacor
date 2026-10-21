@@ -14,7 +14,7 @@
 | ---- | ---- | ---- |
 | `pr-check.yml` | PR → `main`（`crates/**`、`Cargo.toml`、`Cargo.lock`、`.cargo/**`、`.github/**`、`docs/**`、`*.md`） | 三平台的 fmt / clippy / test / release 构建，release profile 的 clippy，四个交叉目标的 `cargo check`，actionlint，以及打了标签的自动合并 |
 | `build-binaries.yml` | 被 `publish.yml` 与 `nightly.yml` 以 `workflow_call` 调用 | 六个平台的 release 二进制：构建、可选 UPX、冒烟测试、打包、`.sha256`、上传 artifact |
-| `publish.yml` | 手动 dispatch：版本提升方式与通道，或填 `tag` 重发已有版本 | 在临时 `release` 分支上提升版本 → 检查该分支 → 调 `build-binaries` → 建草稿 release、上传、公开 → 快进 `main` 并打 tag → 删除分支 |
+| `publish.yml` | 手动 dispatch：版本提升方式与通道，或填 `tag` 重发已有版本 | 在临时 `release` 分支上提升版本 → 检查该分支 → 调 `build-binaries` → 在 `release` 分支 head 上建草稿 release、上传、公开 → 快进 `main` → 删除分支 |
 | `nightly.yml` | 每天 04:00 UTC，或手动 dispatch | 构建 `main`，整体替换 `nightly` 预发布 |
 | `warm-cache.yml` | `main` 上的 Cargo 文件变更、每周一 05:00 UTC、手动 dispatch | 提前把 cargo registry 与 target 缓存写好 |
 | `cleanup-old-caches.yml` | 每周一 00:00 UTC，或手动 dispatch（可 `dry_run`） | 每个缓存族只保留最新一条 |
@@ -40,9 +40,11 @@
    尺寸也是实测值，因此不可能与上传结果不一致。
 6. 预发布通道还会删掉更早的预发布：更新器只看最新的一个，页面上留着的旧版本只会让人装错。
    它们的 tag 会保留，历史仍可从源码复现。
-7. `merge-back` 把 `main` 快进到那个版本提交并创建 `vX`——**只在发布公开之后**，且只在
-   `main` 期间没动过时（快进失败就说明构建期间有人合并了）。版本号为空时它拒绝打标签，
-   否则会打出一个只有 `v` 的发布。
+7. `merge-back` 把 `main` 快进到 bump 提交——**只在**发布已经公开、且构建期间 `main` 没动过
+   时（快进失败就说明有人合并了）。它**不**创建 tag：草稿 release 已经在 `release` 分支的
+   head 上建好了，而 `merge-back` 只有在 `vX` 与 `main` 将要落到的那个 commit 是同一个时
+   才推送。重复打标签正是第一次真实发版失败的方式——快进做完了、`main` 没推上去，公开的
+   tag 指向的还是 bump **之前**的树。
 8. `cleanup` 在成功时删除 `release` 分支；失败的运行会留着它给排查的人看，下次运行会强制
    覆盖。正式版发布还会撤下 `nightly` 发布与标签：用 nightly 的人离正式版只差一条命令。
 
