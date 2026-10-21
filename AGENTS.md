@@ -169,9 +169,17 @@ Format: `<type>(<scope>): <summary>`
 
 ## Branching and pull requests
 
-`main` is protected. **No change, however small, is committed or pushed to it directly.**
-Every change starts on its own branch and reaches `main` through a pull request whose
-`pr-check` is green.
+`main` takes no direct change. **Nothing is committed or pushed to it** — every change
+starts on its own branch and reaches `main` through a pull request whose `pr-check` is
+green.
+
+GitHub does not enforce that here: branch protection and rulesets are unavailable on a
+private repository without a paid plan (`gh api
+repos/{owner}/{repo}/branches/main/protection` answers 403, "Upgrade to GitHub Pro or make
+this repository public"). The rule is therefore held by the people and agents working in
+the repository rather than by the platform — which is all the more reason to follow it,
+and to switch protection on, requiring `pr-check`, the day the repository goes public or
+is upgraded.
 
 ```bash
 git switch -c feat/aab-signing main
@@ -201,11 +209,11 @@ gh pr create --base main --fill
   next person's false start.
 
 The one commit that reaches `main` without a pull request is the release bump that
-`bump.yml` pushes, and that is only acceptable while `main`'s protection lists
-`github-actions[bot]` as a bypass: it is a maintainer action that changes nothing but the
-version and the lock file. If `main` is protected for everyone, that workflow has to open a
-pull request like everything else. Pick one and keep this file and `bump.yml` in agreement —
-a rule that the repository's own automation ignores is not a rule.
+`bump.yml` pushes. It is a maintainer action that changes nothing but the version and the
+lock file, and it is tolerated only because there is no protection for it to bypass; the
+day protection exists, either list `github-actions[bot]` as an exception or make that
+workflow open a pull request like everything else. Keep this file and `bump.yml` in
+agreement — a rule the repository's own automation ignores is not a rule.
 
 ## Releases and CI
 
