@@ -572,11 +572,13 @@ fn an_app_bundle_is_opt_in_and_packaged_alongside_the_apk() {
             fixture.assert_checksum_matches("probe_app-1.0.0+1.aab");
             fixture.assert_checksum_matches("probe_app-1.0.0+1-arm64-v8a.apk");
 
-            // The signer check ran against the bundle, using the tool path.
+            // The signer check ran against the bundle, using the tool path. `contains` rather
+            // than `ends_with`: the Windows stub records the command line with `%*`, which
+            // keeps the quotes cmd put around the path, so the line ends with `"`.
             let calls = fixture.jarsigner_calls();
             assert_eq!(calls.len(), 1, "one `jarsigner -verify`: {calls:?}");
             assert!(calls[0].starts_with("-verify"), "{}", calls[0]);
-            assert!(calls[0].trim_end().ends_with(".aab"), "{}", calls[0]);
+            assert!(calls[0].contains(".aab"), "{}", calls[0]);
 
             // A real build runs Flutter twice: apk (split) then appbundle.
             builder
@@ -714,10 +716,11 @@ fn a_configured_keystore_signs_the_bundle_with_jarsigner() {
                     "`{expected}` missing from `{call}`"
                 );
             }
-            assert!(
-                call.trim_end().ends_with("upload"),
-                "the alias is last: {call}"
-            );
+            // `jarsigner` takes the alias as the last positional argument. Strip a closing
+            // quote first: the Windows stub records the line through `%*`, which keeps the
+            // quotes cmd put around the path.
+            let trimmed = call.trim_end().trim_end_matches('"');
+            assert!(trimmed.ends_with("upload"), "the alias is last: {call}");
 
             // Gradle's signature is gone, so the published bundle carries one
             // signer (the configured upload key) instead of two.
