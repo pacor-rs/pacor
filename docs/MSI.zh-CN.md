@@ -1,15 +1,19 @@
+<p align='center'>
+<a href="MSI.md">English</a> | <span>中文</span>
+</p>
+
 # Pacor MSI 安装器设计方案
 
 > 状态：**已实现**（M1 完成）。`installer_format = "msi"` 会为每个 `[app.i18n]`
 > 语言产出一个全机安装的 MSI。本文档记录选型、契约、实测结论与后续计划，
-> 使用说明见 [WINDOWS.md](WINDOWS.md#msi-安装包)。
+> 使用说明见 [WINDOWS.md](WINDOWS.zh-CN.md#msi-安装包)。
 >
 > 适用范围：**仅 per-machine（全机安装）**。按项目决定，**不实现 per-user 安装**——
 > 这同时消掉了 per-user 才需要的一大堆 MSI 约束（见 7.5）。
 
 ## 1. 目标
 
-在现有 Windows 后端（[docs/WINDOWS.md](WINDOWS.md)）之上增加 MSI 产物，供企业环境通过
+在现有 Windows 后端（[docs/WINDOWS.md](WINDOWS.zh-CN.md)）之上增加 MSI 产物，供企业环境通过
 GPO / Intune / SCCM 部署，并让安装过程可完全脚本化：
 
 | 目标 | 说明 |
@@ -60,7 +64,7 @@ GPO / Intune / SCCM 部署，并让安装过程可完全脚本化：
 
 ## 4. 模板契约：新 tag `1.1`（已发布）
 
-模板 tag 不可变（且采用 GNU 风格版本号，见 [README](../README.md#build-templates)），MSI 需要
+模板 tag 不可变（且采用 GNU 风格版本号，见 [README](../README.zh-CN.md#构建模板)），MSI 需要
 新增模板文件，因此发了 `1.1`：
 
 ```

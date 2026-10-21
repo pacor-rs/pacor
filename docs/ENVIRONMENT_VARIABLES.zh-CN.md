@@ -1,3 +1,7 @@
+<p align='center'>
+<a href="ENVIRONMENT_VARIABLES.md">English</a> | <span>中文</span>
+</p>
+
 # Pacor 环境变量配置文档
 
 本文档详细说明了 Pacor 工具支持的环境变量及其用法。
@@ -191,7 +195,7 @@ export PACOR_GITHUB_RAW_MIRROR_TEMPLATE="https://cdn.jsdelivr.net/gh/<owner>/<re
   经代理后一切正常，但此时**直接用代理而不设镜像**更简单也更快（见上一节）。
 
 因此：镜像的带宽和稳定性仍然重要（每次断流都要重来一段），但单次断流已经不再让构建失败；
-如果镜像完全不可用或速度无法接受，按 [WINDOWS.md](WINDOWS.md) 的方式离线预置 WiX 工具链。
+如果镜像完全不可用或速度无法接受，按 [WINDOWS.md](WINDOWS.zh-CN.md) 的方式离线预置 WiX 工具链。
 
 ### 2. 企业环境
 
@@ -325,4 +329,4 @@ curl -I "https://cdn.jsdelivr.net/gh/flutter/flutter@3.0.0/README.md"
 
 ### Q: 是否支持代理服务器？
 
-**A**: Pacor 的下载器会自动检测系统代理设置，同时也支持通过环境变量配置镜像服务。
+**A**: 下载器**只读环境变量**（`HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY`），与 `curl` 相同；它不会读取 Windows「Internet 选项」里的代理或 PAC 脚本——见上面的 PAC 一节。镜像同样通过环境变量配置。

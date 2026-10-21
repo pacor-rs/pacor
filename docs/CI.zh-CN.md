@@ -1,3 +1,7 @@
+<p align='center'>
+<a href="CI.md">English</a> | <span>中文</span>
+</p>
+
 # CI 与发布流程
 
 `.github/workflows` 下有七个工作流。它们的共同目标是：**能在本地跑通的检查，在 PR 上

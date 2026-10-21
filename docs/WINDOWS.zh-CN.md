@@ -1,10 +1,14 @@
+<p align='center'>
+<a href="WINDOWS.md">English</a> | <span>中文</span>
+</p>
+
 # Pacor Windows 平台说明
 
 本文档说明 `pacor build --target windows` 的产物、配置、工具链缓存与常见排查方法。
 配置项的完整注释模板见 [`crates/pacor-core/src/config/template.toml`](../crates/pacor-core/src/config/template.toml)，
-GitHub 镜像相关环境变量见 [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md)。
+GitHub 镜像相关环境变量见 [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.zh-CN.md)。
 
-> MSI 安装包（`installer_format = "msi"`，全机安装）的设计与实测结论见 [MSI.md](MSI.md)。
+> MSI 安装包（`installer_format = "msi"`，全机安装）的设计与实测结论见 [MSI.md](MSI.zh-CN.md)。
 
 ## 产物
 
@@ -52,7 +56,7 @@ build_portable = true
 
 `installer_format = "msi"` 时每个 `[app.i18n]` 语言各产出一个
 `<name>-<version>-<arch>-<locale>.msi`（`light` 一次只能链接一套本地化文件，见
-[MSI.md](MSI.md)）。与 NSIS 包的关键差异：
+[MSI.md](MSI.zh-CN.md)）。与 NSIS 包的关键差异：
 
 | | NSIS | MSI |
 | --- | --- | --- |
@@ -107,7 +111,7 @@ signtool sign /fd SHA256 /td SHA256 /tr <timestamp_url> /f <certificate_path> /p
 `tmp/`（构建结束时由清理步骤删除，`--skip-cleanup` 可保留；`pacor clean` 只删除 `dist/` 与
 `build/`，不含 `tmp/`）；`debug` 不能混淆，因此不附加这些参数。
 Android 后端不使用构建模式（始终 release，不混淆，符号同样写入 `tmp/`），见
-[ANDROID.md](ANDROID.md)。
+[ANDROID.md](ANDROID.zh-CN.md)。
 
 ## 可执行文件与版权信息的识别
 
@@ -273,12 +277,12 @@ $env:HTTP_PROXY  = "http://127.0.0.1:1086"
 注意：**配置了镜像时 pacor 不使用代理**，两者不能叠加。代理能直连 GitHub 时，用代理、不设镜像
 是最优组合——实测冷缓存下模板 2 s、39 MB 的 WiX 工具链 26 s 下载完成，随后 MSI 与 NSIS 构建都
 在 1 分钟内结束。详见
-[ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md#http_proxy--https_proxy标准代理变量)。
+[ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.zh-CN.md#http_proxy--https_proxy标准代理变量)。
 
 ### 下载 NSIS 或模板失败（网络受限）
 
 pacor 固定的下载地址位于 `github.com` 与 `raw.githubusercontent.com`，在受限网络中可能
-无法访问。可以按 [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md) 配置镜像：
+无法访问。可以按 [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.zh-CN.md) 配置镜像：
 
 - 模板（raw 链接）：`PACOR_GITHUB_RAW_MIRROR_TEMPLATE`；
 - NSIS 发行版（release 资源）：`PACOR_GITHUB_RELEASE_MIRROR_TEMPLATE` 或
@@ -291,7 +295,7 @@ pacor 固定的下载地址位于 `github.com` 与 `raw.githubusercontent.com`�
 $env:PACOR_GITHUB_MIRROR_BASE_URL = "https://gh.my-website.ccwu.cc"
 ```
 
-两点实测经验（详见 [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md#镜像选型要注意的两件事实测)）：
+两点实测经验（详见 [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.zh-CN.md#镜像选型要注意的两件事实测)）：
 
 - 模板文件只有几 KB，任何能连通的镜像都够用；NSIS 发行版约 2 MB，冷启动整条链路实测 1 分钟内完成；
 - **WiX 工具链约 39 MB，是对镜像的考验**：镜像带宽不足或中途断流时下载会中断；pacor 会把已收到的

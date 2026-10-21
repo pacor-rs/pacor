@@ -1,9 +1,13 @@
+<p align='center'>
+<a href="ANDROID.md">English</a> | <span>中文</span>
+</p>
+
 # Pacor Android 平台说明
 
 本文档说明 `pacor build --target android`（`pacor android` 是其别名）的产物、配置、签名流程、
 已知限制与常见排查方法。配置项的完整注释模板见
 [`crates/pacor-core/src/config/template.toml`](../crates/pacor-core/src/config/template.toml)，
-GitHub 镜像相关环境变量见 [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md)。
+GitHub 镜像相关环境变量见 [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.zh-CN.md)。
 
 > 与其他平台不同，Android 后端**不下载任何工具或模板**，也不使用 `%APPDATA%\pacor` 缓存：
 > 它只是调用本机的 `flutter`，工具链（构建与签名）都来自你已安装的 Flutter / Android SDK / JDK。
@@ -42,7 +46,7 @@ dist/probe_app-1.0.0+1.aab
 ```
 
 `.sha1` 在**签名之后**生成：签名会改写文件内容，先算校验和等于发布一个错误的值
-（Windows 后端出于同一原因也是先签名后校验，见 [WINDOWS.md](WINDOWS.md)）。
+（Windows 后端出于同一原因也是先签名后校验，见 [WINDOWS.md](WINDOWS.zh-CN.md)）。
 
 pacor 只把产物复制出来并按上面的规则改名，其余内容（`versionCode`、`versionName`、
 `applicationId`、图标、权限）完全由 Flutter / Gradle 决定。
@@ -171,7 +175,7 @@ arm64-v8a”，同时让 Flutter 构建全部 ABI，导致产物比配置少）�
 > `apksigner`，`formats = ["apk"]` 时不会要求 `jarsigner`。
 
 `pacor check --target android` 会连同 keystore 是否存在、口令是否提供、所选格式需要的签名
-工具是否可定位一起校验，因此配置问题在构建前就能发现（与 [WINDOWS.md](WINDOWS.md) 的
+工具是否可定位一起校验，因此配置问题在构建前就能发现（与 [WINDOWS.md](WINDOWS.zh-CN.md) 的
 `signtool` 校验一致）。
 
 ### `apksigner` 的查找顺序（APK）

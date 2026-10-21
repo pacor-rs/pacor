@@ -223,8 +223,8 @@ crates/
 ├── pacor-packaging/            # target registry (`packager_for`)
 ├── pacor-packaging-linux/      # AppImage, DEB, icons, desktop entry
 ├── pacor-packaging-macos/      # DMG, plist, localization, signing, notarization
-├── pacor-packaging-windows/    # NSIS, portable ZIP, signtool signing
-├── pacor-packaging-android/    # APK assembly, ABIs, signing
+├── pacor-packaging-windows/    # NSIS, MSI, portable ZIP, signtool signing
+├── pacor-packaging-android/    # APK/AAB assembly, ABIs, signing
 └── pacor-cli/                  # clap arguments, dispatch, output, binary `pacor`
 ```
 
