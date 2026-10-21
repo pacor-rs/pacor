@@ -9,7 +9,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Android (APK) packaging backends for pacor."
+description = "Android (APK/AAB) packaging backend for pacor."
 
 [dependencies]
 pacor-core.workspace = true

@@ -9,7 +9,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "macOS (DMG) packaging backends for pacor."
+description = "macOS (app/DMG) packaging backends for pacor."
 
 [dependencies]
 pacor-core.workspace = true

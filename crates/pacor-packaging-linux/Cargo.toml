@@ -9,7 +9,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Linux (AppImage/DEB) packaging backends for pacor."
+description = "Linux (AppImage/DEB/RPM) packaging backends for pacor."
 
 [dependencies]
 pacor-core.workspace = true

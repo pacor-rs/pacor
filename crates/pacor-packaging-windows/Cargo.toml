@@ -9,7 +9,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Windows (NSIS/portable) packaging backends for pacor."
+description = "Windows (NSIS/MSI) packaging backends for pacor."
 
 [dependencies]
 pacor-core.workspace = true
