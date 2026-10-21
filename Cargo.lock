@@ -600,7 +600,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "pacor"
-version = "0.1.0-alpha"
+version = "0.1.0-alpha.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -616,7 +616,7 @@ dependencies = [
 
 [[package]]
 name = "pacor-core"
-version = "0.1.0-alpha"
+version = "0.1.0-alpha.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -637,7 +637,7 @@ dependencies = [
 
 [[package]]
 name = "pacor-packaging"
-version = "0.1.0-alpha"
+version = "0.1.0-alpha.0"
 dependencies = [
  "anyhow",
  "pacor-core",
@@ -650,7 +650,7 @@ dependencies = [
 
 [[package]]
 name = "pacor-packaging-android"
-version = "0.1.0-alpha"
+version = "0.1.0-alpha.0"
 dependencies = [
  "anyhow",
  "pacor-core",
@@ -663,7 +663,7 @@ dependencies = [
 
 [[package]]
 name = "pacor-packaging-linux"
-version = "0.1.0-alpha"
+version = "0.1.0-alpha.0"
 dependencies = [
  "anyhow",
  "ar",
@@ -679,7 +679,7 @@ dependencies = [
 
 [[package]]
 name = "pacor-packaging-macos"
-version = "0.1.0-alpha"
+version = "0.1.0-alpha.0"
 dependencies = [
  "anyhow",
  "pacor-core",
@@ -689,7 +689,7 @@ dependencies = [
 
 [[package]]
 name = "pacor-packaging-windows"
-version = "0.1.0-alpha"
+version = "0.1.0-alpha.0"
 dependencies = [
  "anyhow",
  "pacor-core",
