@@ -167,11 +167,57 @@ Format: `<type>(<scope>): <summary>`
   --platforms=android`) here: 5.7 MB and 6.3 MB split APKs plus a 23.8 MB bundle, ...
   ```
 
-## Branches, releases and CI
+## Branching and pull requests
 
-- The default branch is `main`. Changes go through a pull request, and `pr-check` must be
-  green. A pull request labelled `automerge` is merged automatically once no check failed or
-  was cancelled (not from a fork: those get a read-only token).
+`main` takes no direct change. **Nothing is committed or pushed to it** — every change
+starts on its own branch and reaches `main` through a pull request whose `pr-check` is
+green.
+
+GitHub does not enforce that here: branch protection and rulesets are unavailable on a
+private repository without a paid plan (`gh api
+repos/{owner}/{repo}/branches/main/protection` answers 403, "Upgrade to GitHub Pro or make
+this repository public"). The rule is therefore held by the people and agents working in
+the repository rather than by the platform — which is all the more reason to follow it,
+and to switch protection on, requiring `pr-check`, the day the repository goes public or
+is upgraded.
+
+```bash
+git switch -c feat/aab-signing main
+# ... work, commit ...
+git push -u origin feat/aab-signing
+gh pr create --base main --fill
+```
+
+- **Branch names describe the change, not the person**: `<type>/<slug>`, using the commit
+  types (`feat/android-aab`, `fix/nsis-space-in-name`, `docs/english-docs`,
+  `ci/upx-optional`). One branch per functional change — a branch that accumulates three
+  unrelated fixes cannot be reviewed, and cannot be reverted without dragging the others
+  along.
+- **The pull request is the unit of review.** Its description says what changes and why, in
+  the same terms as the commit body, so that the merged history stays readable on its own.
+- **Keep the branch current by rebasing on `main`**, not by merging `main` into it, so the
+  history stays linear and the diff stays reviewable.
+- **No direct pushes, no force-pushes to `main`, no `--no-verify`.** An urgent one-line fix
+  is still a pull request; with `pr-check` green it merges in under a minute, and labelling
+  it `automerge` is what makes that automatic (a fork's pull request cannot merge: its token
+  is read-only).
+- **Agents follow this too.** Create the branch *before* the first commit rather than
+  committing on `main` and moving the commits afterwards: a rebased-away commit still shows
+  up in the reflog and in whoever is watching the terminal, and it means part of the work
+  was written under different assumptions than the part that is reviewed.
+- **The merged branch is deleted for you**: `delete-merged-branch.yml` removes the head ref of
+  every merged pull request (it keeps long-lived names, forks, and a branch that another open
+  pull request still uses). `gh pr merge --delete-branch` just does not wait for it.
+
+The one commit that reaches `main` without a pull request is the release bump that
+`bump.yml` pushes. It is a maintainer action that changes nothing but the version and the
+lock file, and it is tolerated only because there is no protection for it to bypass; the
+day protection exists, either list `github-actions[bot]` as an exception or make that
+workflow open a pull request like everything else. Keep this file and `bump.yml` in
+agreement — a rule the repository's own automation ignores is not a rule.
+
+## Releases and CI
+
 - **The version lives only in `[workspace.package]` in `Cargo.toml`** (every crate uses
   `version.workspace = true`). After changing it, run `cargo update --workspace` so
   `Cargo.lock` follows, otherwise `--locked` builds fail.
@@ -186,7 +232,7 @@ Format: `<type>(<scope>): <summary>`
   ```bash
   docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:latest -color
   ```
-- `docs/CI.md` has the full picture: when each of the seven workflows runs, how the cache keys
+- `docs/CI.md` has the full picture: when each of the eight workflows runs, how the cache keys
   are built, and what the release and nightly jobs do.
 
 ## Known traps
@@ -205,10 +251,11 @@ Format: `<type>(<scope>): <summary>`
 
 ## Before you commit
 
-1. `cargo fmt --all -- --check`, `clippy` (debug and release) and `test --workspace` are green.
-2. If behaviour changed, the documentation changed in the same commit (`docs/*.md` in both
+1. You are on a branch, not on `main`, and the branch is named for the change.
+2. `cargo fmt --all -- --check`, `clippy` (debug and release) and `test --workspace` are green.
+3. If behaviour changed, the documentation changed in the same commit (`docs/*.md` in both
    languages, both READMEs, the `template.toml` comments).
-3. Every new or changed flag, environment variable and path is documented somewhere.
-4. The commit message explains why and how it was verified, rather than listing the diff.
-5. `git status` shows no `target/`, `tmp/`, probe project or scratch script.
-6. New or moved documents come in pairs, and the links point at the English file.
+4. Every new or changed flag, environment variable and path is documented somewhere.
+5. The commit message explains why and how it was verified, rather than listing the diff.
+6. `git status` shows no `target/`, `tmp/`, probe project or scratch script.
+7. New or moved documents come in pairs, and the links point at the English file.

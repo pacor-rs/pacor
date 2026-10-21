@@ -1,6 +1,10 @@
+<p align='center'>
+<a href="CI.md">English</a> | <span>中文</span>
+</p>
+
 # CI 与发布流程
 
-`.github/workflows` 下有七个工作流。它们的共同目标是：**能在本地跑通的检查，在 PR 上
+`.github/workflows` 下有八个工作流。它们的共同目标是：**能在本地跑通的检查，在 PR 上
 一定跑；不能本地跑的东西（六个平台的二进制）只在真需要的时候跑；任何"看起来绿了但什么
 都没做"的状态都要被显式说出来。**
 
@@ -15,6 +19,7 @@
 | `warm-cache.yml` | `main` 上的 Cargo 文件变更、每周一 05:00 UTC、手动 dispatch | 提前把 cargo registry 与 target 缓存写好 |
 | `cleanup-old-caches.yml` | 每周一 00:00 UTC，或手动 dispatch（可 `dry_run`） | 每个缓存族只保留最新一条 |
 | `bump.yml` | 手动 dispatch（`version`，可选 `dry_run`） | 改版本号、同步 `Cargo.lock`、提交、打 tag，并触发发布 |
+| `delete-merged-branch.yml` | PR 被合并后关闭 | 删除该分支；长期分支、来自 fork 的分支、以及仍被其它未合并 PR 使用的分支除外 |
 
 ## 发版
 
@@ -53,6 +58,20 @@
   免得"什么都没构建"被误读成"什么都验过了"。
 - 中间产物保留 1 天。
 
+## 分支清理
+
+PR 被关闭**且已合并**时，`delete-merged-branch.yml` 会删除它的头分支——打 `automerge`
+标签自动合并与人工点"Merge"是同一个事件，都走这里。以下情况保留分支：
+
+- 分支名属于长期分支（`main`、`master`、`develop`、`release/*`、`release-*`）：
+  某个 PR 恰好以它为头分支，不构成删除它的理由；
+- PR 来自 fork：分支在别人的仓库里，这个 token 够不着；
+- 还有其它未合并的 PR 以它为头分支——堆叠 PR 正是这种形状，删掉 ref 会让子 PR 未经决定
+  就被关闭。
+
+ref 本来就不存在算成功：如果仓库开启了"自动删除头分支"设置，这个工作流只是第二道保险而
+已。每次运行都会把结果写进 job summary，被保留下来的分支旁边就写着原因。
+
 ## 缓存
 
 缓存键的形状（`<cachekey>` 是 dtolnay/rust-toolchain 输出的 rustc 版本哈希）：
@@ -81,6 +100,9 @@
 
 ## 漂移防护
 
+- **`main` 只通过 PR 接收改动。** 所有改动先落在各自的分支上，`pr-check` 全绿后才合并；
+  不直接向 `main` 推送。本仓库所在的 Plan 无法启用分支保护，所以这一条靠评审而不是靠
+  GitHub 执行。唯一例外是 `bump.yml` 推的发布版本提升，它只改版本号与 lock 文件。
 - **所有 action 用版本号引用**（`@v7`、`@v5.1.0`），不用 commit SHA：评审时能直接看出
   跑的是哪个版本。浮动分支（`@main`）不叫版本号，一律不用。
 - **每个 job 都有 `timeout-minutes`**：挂死的 job 不会占着 runner 跑 6 小时。

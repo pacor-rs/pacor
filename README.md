@@ -223,8 +223,8 @@ crates/
 ├── pacor-packaging/            # target registry (`packager_for`)
 ├── pacor-packaging-linux/      # AppImage, DEB, icons, desktop entry
 ├── pacor-packaging-macos/      # DMG, plist, localization, signing, notarization
-├── pacor-packaging-windows/    # NSIS, portable ZIP, signtool signing
-├── pacor-packaging-android/    # APK assembly, ABIs, signing
+├── pacor-packaging-windows/    # NSIS, MSI, portable ZIP, signtool signing
+├── pacor-packaging-android/    # APK/AAB assembly, ABIs, signing
 └── pacor-cli/                  # clap arguments, dispatch, output, binary `pacor`
 ```
 
@@ -289,9 +289,9 @@ cargo check --workspace --target aarch64-apple-darwin
 
 ## Continuous integration
 
-Seven workflows under `.github/workflows` cover the checks, the release and cache
-housekeeping; **[docs/CI.md](docs/CI.md)** describes each of them, the release
-procedure and the caching scheme.
+Eight workflows under `.github/workflows` cover the checks, the release, cache
+housekeeping and branch cleanup; **[docs/CI.md](docs/CI.md)** describes each of them, the
+release procedure and the caching scheme.
 
 In short: a pull request runs `fmt`, `clippy`, the test suite and a release build on
 Linux, macOS and Windows, plus a release-profile lint pass (the `#[cfg(debug_assertions)]`

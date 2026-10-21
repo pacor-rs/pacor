@@ -122,8 +122,8 @@ formats = ["apk"]                                  # 上架 Play 用 ["apk", "aa
 密钥优先从环境变量读取，且不会被写回配置文件：
 `PACOR_WINDOWS_CERT_PASSWORD`、`PACOR_ANDROID_KEYSTORE_PASSWORD`、
 `PACOR_ANDROID_KEY_PASSWORD`。GitHub 镜像相关变量见
-[docs/ENVIRONMENT_VARIABLES.md](docs/ENVIRONMENT_VARIABLES.md)，APK 签名配置见
-[docs/ANDROID.md](docs/ANDROID.md)。
+[docs/ENVIRONMENT_VARIABLES.md](docs/ENVIRONMENT_VARIABLES.zh-CN.md)，APK 签名配置见
+[docs/ANDROID.md](docs/ANDROID.zh-CN.md)。
 `PACOR_OUTPUT_DIR` 与 `PACOR_BUILD_MODE` 会覆盖 `[build]` 中的对应项。
 
 ## Windows 平台
@@ -147,12 +147,12 @@ dist/MyApp-1.0.0+1-x64-portable.zip
 
 当 `PATH` 中的 `makensis` 可写其插件目录时会直接使用它，否则 pacor 会把固定版本的 NSIS
 下载到 `%APPDATA%\pacor\windows\nsis\<模板 tag>`，与它渲染的模板放在一起。
-产物细节、签名选项、缓存布局与由此可解释的报错见 [docs/WINDOWS.md](docs/WINDOWS.md)。
+产物细节、签名选项、缓存布局与由此可解释的报错见 [docs/WINDOWS.md](docs/WINDOWS.zh-CN.md)。
 
 `installer_format` 在两者之间选择：`nsis` 为当前用户安装（位于 `%LOCALAPPDATA%`，无需管理员
 权限），`msi` 为全机安装（位于 `%ProgramFiles%`，需要管理员权限），并为每个配置的语言各产出
 一个包——`light` 无法合并定义了相同标识符的本地化文件。工具链、模板契约与实现所遵循的约束见
-[docs/MSI.md](docs/MSI.md)。
+[docs/MSI.md](docs/MSI.zh-CN.md)。
 
 ## Android 平台
 
@@ -188,7 +188,7 @@ AOT 符号被 `--split-debug-info=tmp/` 拆到项目下的 `tmp/`，因此不进
 需要保留（供 `flutter symbolize` 使用）时加 `--skip-cleanup`。
 
 Android 始终构建 release（构建模式体现在 APK 文件名里）、不使用 `[app.i18n]`。
-配置项、两套签名工具链、已知限制与常见报错见 [docs/ANDROID.md](docs/ANDROID.md)。
+配置项、两套签名工具链、已知限制与常见报错见 [docs/ANDROID.md](docs/ANDROID.zh-CN.md)。
 
 ## 项目结构
 
@@ -200,8 +200,8 @@ crates/
 ├── pacor-packaging/            # 目标注册表（`packager_for`）
 ├── pacor-packaging-linux/      # AppImage、DEB、图标、desktop 入口
 ├── pacor-packaging-macos/      # DMG、plist、本地化、签名、公证
-├── pacor-packaging-windows/    # NSIS、便携 ZIP、signtool 签名
-├── pacor-packaging-android/    # APK 组装、ABI、签名
+├── pacor-packaging-windows/    # NSIS、MSI、便携 ZIP、signtool 签名
+├── pacor-packaging-android/    # APK/AAB 组装、ABI、签名
 └── pacor-cli/                  # clap 参数、分发、输出、二进制 `pacor`
 ```
 
@@ -210,6 +210,28 @@ crates/
 Windows 后端内部：`nsis/` 负责安装包（工具链解析、模板准备、脚本渲染），`signing.rs` 负责
 Authenticode 签名，`flutter.rs` 负责 `flutter build` 调用，`runner.rs` 负责从生成的 runner
 工程中读取可执行文件名与版权信息。
+
+### 构建模板
+
+构建模板与兜底图标集放在另一个仓库
+[`pacor-rs/tools`](https://github.com/pacor-rs/tools)。它们从**标签**下载，绝不从分支下载：
+`pacor-core/src/tools.rs` 固定了本次构建所针对的标签，每个后端都从它推导下载 URL。
+
+这样模板与渲染它们的代码始终同步——模板的改动到不了不理解它的 pacor 构建。标签同时也是
+每个缓存路径的一部分（`<tools>/deb/1.1`、`<tools>/icons/1.1` 等），所以只要提升标签就能让
+陈旧副本失效；标签内容不可变，因此不需要其它机制。
+
+标签采用 GNU 风格版本号（`MAJOR.MINOR`，可选带补丁号），而不是带 `v` 前缀的形式：
+向后兼容的模板新增是小版本号提升，不兼容的是大版本号提升。`v1` 早于这个约定，它持有的
+树就是 `1.0` 会指向的那一份。
+
+需要改动模板时：
+
+1. 在 `pacor-rs/tools` 中修改模板并创建新标签，用标签信息写明它所描述的契约（标签永不移动）；
+2. 提升 `crates/pacor-core/src/tools.rs` 里的 `TEMPLATE_REF`。
+
+使用了 pacor 不提供的变量的模板会让构建失败，而不是把占位符烧进生成的源码，因此不一致是
+响亮的。
 
 ## 开发
 
@@ -236,8 +258,8 @@ cargo check --workspace --target aarch64-apple-darwin
 
 ## 持续集成与发布
 
-`.github/workflows` 下有七个工作流，分别负责检查、发布与缓存维护；
-**[docs/CI.md](docs/CI.md)** 逐个说明它们什么时候跑、跑什么，以及发版流程。
+`.github/workflows` 下有八个工作流，分别负责检查、发布、缓存维护与分支清理；
+**[docs/CI.md](docs/CI.zh-CN.md)** 逐个说明它们什么时候跑、跑什么，以及发版流程。
 
 简述：PR 会在 Linux、macOS、Windows 上跑 `fmt`、`clippy`、测试与 release 构建，另外还有一次
 release profile 的 lint（`#[cfg(debug_assertions)]` 那段代码）与三个交叉目标的
