@@ -4,7 +4,7 @@
 
 # CI and the release process
 
-`.github/workflows` holds eight workflows. They share one goal: **a check that can run
+`.github/workflows` holds seven workflows. They share one goal: **a check that can run
 locally must run on every pull request; something that cannot run locally (the binaries
 for six platforms) runs only when it is really needed; and any state that "looks green
 because nothing happened" has to say so out loud.**
@@ -15,49 +15,52 @@ because nothing happened" has to say so out loud.**
 | ---- | ---- | ---- |
 | `pr-check.yml` | PR → `main` (`crates/**`, `Cargo.toml`, `Cargo.lock`, `.cargo/**`, `.github/**`, `docs/**`, `*.md`) | `fmt` / `clippy` / `test` / release build on three platforms, a release-profile clippy pass, `cargo check` for three cross targets, actionlint, and the labelled auto-merge |
 | `build-binaries.yml` | called by `publish.yml` and `nightly.yml` via `workflow_call` | release binaries for six platforms: build, optional UPX, smoke test, package, `.sha256`, upload artifact |
-| `publish.yml` | push of a `v*` tag, or a manual dispatch (with `tag`) | verify the tag matches the version in `Cargo.toml` → call `build-binaries` → create a draft release → upload → publish |
+| `publish.yml` | manual dispatch: a version bump and channel, or an existing `tag` to re-publish | bump the version on a temporary `release` branch → check it → call `build-binaries` → create a draft release, upload, publish → fast-forward `main` and tag → delete the branch |
 | `nightly.yml` | every day at 04:00 UTC, or manual dispatch | build `main`, replace the `nightly` pre-release wholesale |
 | `warm-cache.yml` | Cargo file changes on `main`, Monday 05:00 UTC, manual dispatch | write the cargo registry and target caches ahead of time |
 | `cleanup-old-caches.yml` | Monday 00:00 UTC, or manual dispatch (`dry_run`) | keep only the newest entry of each cache family |
-| `bump.yml` | manual dispatch (`version`, optional `dry_run`) | bump the version, sync `Cargo.lock`, commit, tag, and start the release |
 | `delete-merged-branch.yml` | a pull request is closed after being merged | delete the head branch, unless it is long-lived, from a fork, or still used by an open pull request |
 
 ## Releasing
 
-1. Run **Bump Version**: put `0.2.0` or `0.2.0-alpha.1` in `version`; a `dry_run` first is
-   fine. It does four things: edit `[workspace.package] version` (every crate inherits it),
-   `cargo update --workspace` to sync `Cargo.lock`, commit `chore(release): vX`, and create
-   an annotated tag. The version has to be given explicitly — the repository has neither
-   `npm` nor `cargo-release`, and what "`patch`" means for a `0.1.0-alpha` is a decision a
-   person should make.
-2. It then starts **Publish Release**. There is a trap here: **a tag pushed with
-   `GITHUB_TOKEN` does not trigger other workflows** (that is GitHub's recursion guard), so
-   `bump.yml` calls `gh workflow run publish.yml -f tag=vX` after pushing instead of hoping
-   the tag wakes the release up. (To drive everything from the tag alone, give that step a
-   PAT with `repo` scope.)
-3. `verify` compares `v$version` with the tag and fails **within five seconds** if they
-   disagree, instead of burning six runners first. Whether `Cargo.lock` matches the
-   manifests is enforced by `--locked` at build time.
-4. Six platforms build in parallel → each produces a flat archive (extracting it gives the
-   binary, not the `target/<triple>/release/` directory structure) plus a matching
-   `.sha256`. **UPX compression is optional and off by default**: tick `compress` when
-   dispatching by hand if you want smaller downloads (it applies to Linux and Windows; a
-   failed compression only prints a warning and does not block the release). It is off by
-   default because it rewrites the executable — backtraces in crash reports become hard to
-   read, and packed binaries trip antivirus heuristics more easily. A nightly, whose whole
-   purpose is debugging, needs it least. macOS is never compressed: the Mach-O that UPX
-   produces is not reliable.
-5. The release is created **as a draft and published only after the upload finishes**, so a
-   failure halfway cannot leave a half-populated release that "latest" points at.
-6. A version with `-alpha`/`-beta`/any pre-release suffix automatically gets
-   `--prerelease --latest=false` and does not take the latest slot.
-7. Assets: `pacor-<Platform>.zip|tar.gz`, a matching `.sha256`, and a combined
-   `SHA256SUMS` (`sha256sum -c SHA256SUMS` works directly, and it is the format
-   winget/Scoop/Homebrew want anyway).
+1. Dispatch **Publish Release** and choose how the version moves (`patch`, `minor`, `major`,
+   or `prerelease` for one more alpha/beta) and the channel (`stable`, `alpha`, `beta`).
+   Filling in `tag` re-publishes an existing tag instead, without touching the version.
+2. `prepare` works the version out with npm's rules — a patch on `0.1.0-alpha` is `0.1.0`,
+   because that pre-release *was* the patch release — edits `[workspace.package] version`,
+   runs `cargo update --workspace`, commits `chore(release): vX` and pushes it to a
+   temporary `release` branch. A `release`-only branch that has to be cleaned up sounds
+   worse than pushing to `main`, and it is not: nothing outside this workflow reads it, and
+   `main` stays where it was until the release is public.
+3. `check` runs `fmt`, `clippy` and the test suite **on that branch**, because no pull
+   request reviewed it. Then six platforms build from the same ref.
+4. Each platform produces a flat archive (extracting it gives the binary, not the
+   `target/<triple>/release/` directory structure) plus a matching `.sha256`. **UPX
+   compression is optional and off by default**: tick `compress` if you want smaller
+   downloads (Linux and Windows only; a failed compression prints a warning and does not
+   block the release). It is off because it rewrites the executable — backtraces become hard
+   to read and packed binaries trip antivirus heuristics. macOS is never compressed: the
+   Mach-O that UPX produces is not reliable.
+5. The release is created **as a draft**, the assets are uploaded, and only then is it
+   published. The downloads list in its notes is rendered **from the assets that actually
+   exist**, with their measured sizes, so it cannot drift from the upload.
+6. A pre-release channel additionally deletes the previous pre-releases: the updater only
+   ever sees the newest one, and older ones on the page are invitations to install the wrong
+   thing. Their tags stay, so the history is still reproducible.
+7. `merge-back` fast-forwards `main` to the bump commit and creates `vX` — **only** after the
+   release is public, and only if `main` has not moved in the meantime (a fast-forward that
+   fails means someone merged while the release was building). It refuses to tag when the
+   version is empty, because that is how a release gets tagged `v`.
+8. `cleanup` deletes the `release` branch on success; a failed run leaves it behind for
+   whoever debugs it, and the next run force-pushes over it. A stable release also retires
+   the `nightly` release and tag: people on the nightly are one command away from stable.
 
-**Re-publishing the same tag**: dispatch with `tag` filled in; it rebuilds from that tag's
-tree and overwrites the existing release's notes and assets (`gh release upload --clobber`).
+**Re-publishing a tag** (`tag` filled in) rebuilds from that tag's tree, replaces the assets
+with `--clobber` and refreshes the notes — no bump, no merge-back, no cleanup. That is the
+way out of a broken asset.
 
+**Why dispatch and not a tag push**: the tag is now *produced* by this workflow, so a
+`push: tags: v*` trigger would re-enter itself at the merge-back step.
 ## Nightly
 
 - Builds `main` every day at 04:00 UTC. `nightly` is a **moving tag**: the old release and
@@ -66,7 +69,9 @@ tree and overwrites the existing release's notes and assets (`gh release upload 
 - When it skips: `nightly` already points at the same commit, or HEAD itself carries a `v*`
   release tag (that release already covers it). A skip writes a `GITHUB_STEP_SUMMARY` line
   saying why, so "nothing was built" cannot be misread as "everything was verified".
-- Intermediate artifacts are kept for one day.
+- Intermediate artifacts are kept for one day, and a stable release deletes the
+  `nightly` release and tag (`publish.yml`'s last job): someone on the nightly is one
+  command away from stable, and leaving both published keeps them on yesterday's build.
 
 ## Branch cleanup
 
@@ -170,7 +175,9 @@ docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:latest -color
 - **It does not sign or notarize pacor itself.** What is published is a CLI binary;
   `codesign`/`notarytool` are what pacor does to a user's artifacts (`--target macos`), which
   has nothing to do with building pacor.
-- **It does not guess a version number**: `bump.yml` requires an explicit `version`.
+- **It does not accept a hand-written version**: the bump is computed from
+  `bump_type` × `release_channel`, so the three places a version lives (the manifest,
+  the lock file, the tag) can never disagree.
 - **It does not test the toolchain for the Windows-arm64 cross build**:
   `aarch64-pc-windows-msvc` relies on the ARM64 MSVC toolchain that the `windows-latest` image
   ships, exactly as before this rework.

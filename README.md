@@ -297,8 +297,9 @@ In short: a pull request runs `fmt`, `clippy`, the test suite and a release buil
 Linux, macOS and Windows, plus a release-profile lint pass (the `#[cfg(debug_assertions)]`
 code path) and three cross-target `cargo check` runs; a `v*` tag is published with six
 binaries, per-asset `.sha256` files and a combined `SHA256SUMS`; `main` is rebuilt every
-day as the `nightly` pre-release. `Bump Version` does the version bump, the `Cargo.lock`
-sync and the tagging, so the tag and the manifest cannot disagree.
+day as the `nightly` pre-release. A release is one dispatch of **Publish Release**: it bumps
+the version, checks and builds a temporary branch, publishes the draft, and only then
+fast-forwards `main` and tags it, so the tag and the manifest cannot disagree.
 
 ## License
 

@@ -210,20 +210,22 @@ gh pr create --base main --fill
   pull request still uses). `gh pr merge --delete-branch` just does not wait for it.
 
 The one commit that reaches `main` without a pull request is the release bump that
-`bump.yml` pushes. It is a maintainer action that changes nothing but the version and the
-lock file, and it is tolerated only because there is no protection for it to bypass; the
-day protection exists, either list `github-actions[bot]` as an exception or make that
-workflow open a pull request like everything else. Keep this file and `bump.yml` in
-agreement — a rule the repository's own automation ignores is not a rule.
+`publish.yml` fast-forwards in — after the release is public, and only when `main` has not
+moved. It changes nothing but the version and the lock file, and it is tolerated because
+no protection exists to bypass it; the day protection exists, either list
+`github-actions[bot]` as an exception or make `publish.yml` open a pull request and tag
+after that merges. A rule the repository's own automation ignores is not a rule.
 
 ## Releases and CI
 
 - **The version lives only in `[workspace.package]` in `Cargo.toml`** (every crate uses
   `version.workspace = true`). After changing it, run `cargo update --workspace` so
   `Cargo.lock` follows, otherwise `--locked` builds fail.
-- Releases are triggered by a `v*` tag, and the tag must match `[workspace.package] version`
-  exactly (`publish.yml`'s `verify` job compares them first). Prefer the **Bump Version**
-  workflow for "bump, sync the lock, tag" instead of doing the steps by hand.
+- Releases are dispatched, not tagged: **Publish Release** takes a `bump_type` and a
+  channel, bumps the version on a temporary `release` branch, checks and builds that
+  branch, publishes a draft, and only then fast-forwards `main` and creates `vX`. Never
+  edit the version by hand, and never push a `v*` tag for a release — the tag is the
+  workflow's output.
 - Never move a published tag and never hand-edit release assets — re-publish by dispatching
   `publish` again.
 - Workflows reference actions by **version** (`@v7`, `@v5`, `@v4`), never `@main`/`@latest`,
@@ -232,7 +234,7 @@ agreement — a rule the repository's own automation ignores is not a rule.
   ```bash
   docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:latest -color
   ```
-- `docs/CI.md` has the full picture: when each of the eight workflows runs, how the cache keys
+- `docs/CI.md` has the full picture: when each of the seven workflows runs, how the cache keys
   are built, and what the release and nightly jobs do.
 
 ## Known traps
@@ -240,7 +242,7 @@ agreement — a rule the repository's own automation ignores is not a rule.
 - **CRLF.** `Cargo.toml` is CRLF in some Windows checkouts, which makes
   `sed '/^\[workspace\.package\]$/ ...'` match nothing — and the failure looks like a missing
   key. Strip it with `tr -d '\r'` before parsing and preserve the original line endings when
-  writing; `publish.yml` and `bump.yml` do exactly that.
+  writing; `publish.yml` does exactly that.
 - **Symbol files.** Android's `--split-debug-info` writes into the project's `tmp/`, which
   `pacor clean` removes and `--skip-cleanup` keeps. `tmp/` is ignored by git; do not commit it.
 - **Direct connections to GitHub** are reset on some networks (raw, API and release assets
