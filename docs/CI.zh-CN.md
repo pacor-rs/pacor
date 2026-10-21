@@ -4,7 +4,7 @@
 
 # CI 与发布流程
 
-`.github/workflows` 下有八个工作流。它们的共同目标是：**能在本地跑通的检查，在 PR 上
+`.github/workflows` 下有七个工作流。它们的共同目标是：**能在本地跑通的检查，在 PR 上
 一定跑；不能本地跑的东西（六个平台的二进制）只在真需要的时候跑；任何"看起来绿了但什么
 都没做"的状态都要被显式说出来。**
 
@@ -14,41 +14,43 @@
 | ---- | ---- | ---- |
 | `pr-check.yml` | PR → `main`（`crates/**`、`Cargo.toml`、`Cargo.lock`、`.cargo/**`、`.github/**`、`docs/**`、`*.md`） | 三平台的 fmt / clippy / test / release 构建，release profile 的 clippy，三个交叉目标的 `cargo check`，actionlint，以及打了标签的自动合并 |
 | `build-binaries.yml` | 被 `publish.yml` 与 `nightly.yml` 以 `workflow_call` 调用 | 六个平台的 release 二进制：构建、可选 UPX、冒烟测试、打包、`.sha256`、上传 artifact |
-| `publish.yml` | 推送 `v*` tag，或手动 dispatch（填 `tag`） | 校验 tag 与 `Cargo.toml` 的版本一致 → 调 `build-binaries` → 建草稿 release → 上传 → 发布 |
+| `publish.yml` | 手动 dispatch：版本提升方式与通道，或填 `tag` 重发已有版本 | 在临时 `release` 分支上提升版本 → 检查该分支 → 调 `build-binaries` → 建草稿 release、上传、公开 → 快进 `main` 并打 tag → 删除分支 |
 | `nightly.yml` | 每天 04:00 UTC，或手动 dispatch | 构建 `main`，整体替换 `nightly` 预发布 |
 | `warm-cache.yml` | `main` 上的 Cargo 文件变更、每周一 05:00 UTC、手动 dispatch | 提前把 cargo registry 与 target 缓存写好 |
 | `cleanup-old-caches.yml` | 每周一 00:00 UTC，或手动 dispatch（可 `dry_run`） | 每个缓存族只保留最新一条 |
-| `bump.yml` | 手动 dispatch（`version`，可选 `dry_run`） | 改版本号、同步 `Cargo.lock`、提交、打 tag，并触发发布 |
 | `delete-merged-branch.yml` | PR 被合并后关闭 | 删除该分支；长期分支、来自 fork 的分支、以及仍被其它未合并 PR 使用的分支除外 |
 
 ## 发版
 
-1. 跑 **Bump Version**：`version` 填 `0.2.0` 或 `0.2.0-alpha.1`，先 `dry_run` 看 diff 也行。
-   它做四件事：改 `[workspace.package] version`（其他 crate 都继承它）、
-   `cargo update --workspace` 同步 `Cargo.lock`、提交 `chore(release): vX`、打 annotated tag。
-   版本号必须显式给出——仓库里没有 `npm`/`cargo-release`，而"`patch` 对 `0.1.0-alpha`
-   意味着什么"应该是人决定的。
-2. 它随后触发 **Publish Release**。注意这里有个坑：**用 `GITHUB_TOKEN` 推的 tag 不会触发
-   其它工作流**（GitHub 防递归），所以 `bump.yml` 在推完 tag 后显式调用
-   `gh workflow run publish.yml -f tag=vX`，而不是指望 tag 自己唤醒发布流程。
-   （如果想完全靠 tag 触发，就给这一步换一个有 `repo` 权限的 PAT。）
-3. `verify` 先比对 `v$version` 与 tag，不一致 **5 秒内**失败，不会先烧掉六个 runner；
-   `Cargo.lock` 与清单是否一致，由构建时的 `--locked` 保证。
-4. 六个平台并行构建 → 每个产出一个压平的压缩包（解压就是二进制，不带
-   `target/<triple>/release/` 目录结构）+ 同名 `.sha256`。
-   **UPX 压缩是可选的，默认关闭**：需要更小的下载体积时，在手动 dispatch 时勾上
-   `compress`（Linux 与 Windows 生效，压不动会打 warning 并继续，不阻塞发布）。
-   默认关闭的原因是它会把可执行文件改写——崩溃报告里的回溯变难读，也更容易触发杀软误报；
-   用于排查的 nightly 尤其不需要它。macOS 从不压缩：UPX 产出的 Mach-O 不可靠。
-5. release **先建草稿、上传完再 publish**：中途失败不会留下一个被 "latest" 指向的半成品。
-6. 版本号带 `-alpha`/`-beta`/任何预发布后缀时自动加 `--prerelease --latest=false`，
-   不会占用 latest。
-7. 资产：`pacor-<Platform>.zip|tar.gz`、同名 `.sha256`，以及汇总的 `SHA256SUMS`
-   （`sha256sum -c SHA256SUMS` 可直接校验，也是 winget/Scoop/Homebrew 想要的格式）。
+1. 手动 dispatch **Publish Release**，选择版本怎么走（`patch`、`minor`、`major`，或只递增
+   预发布号的 `prerelease`）和发布通道（`stable`、`alpha`、`beta`）。填了 `tag` 则改为重发
+   已有的 tag，不碰版本号。
+2. `prepare` 按 npm 的规则算出新版本——`0.1.0-alpha` 上做 `patch` 得到 `0.1.0`，因为那个
+   预发布本身就是这次补丁发布——然后改 `[workspace.package] version`、跑
+   `cargo update --workspace`、提交 `chore(release): vX`，推到一个临时的 `release` 分支。
+   听起来"为了一个版本号还得建分支再删"比直接推 `main` 更麻烦，其实不是：这个分支除了本
+   工作流没人读，而 `main` 在发布公开之前一动不动。
+3. `check` 会在**这个分支上**跑 `fmt`、`clippy` 与测试，因为没有 PR 评审过它。之后六个平台
+   从同一个 ref 构建。
+4. 每个平台产出一个压平的压缩包（解压就是二进制，不带 `target/<triple>/release/` 结构），
+   并配一份同名 `.sha256`。**UPX 压缩可选、默认关闭**：勾上 `compress` 才会压（仅 Linux 与
+   Windows；压不动只打 warning，不阻塞发布）。默认关闭是因为它改写可执行文件——崩溃回溯
+   变难读、更容易触发杀软误报。macOS 从不压缩：UPX 产出的 Mach-O 不可靠。
+5. release **先建草稿**，资产传完才公开。说明里的下载列表是**按真实存在的资产**渲染的，
+   尺寸也是实测值，因此不可能与上传结果不一致。
+6. 预发布通道还会删掉更早的预发布：更新器只看最新的一个，页面上留着的旧版本只会让人装错。
+   它们的 tag 会保留，历史仍可从源码复现。
+7. `merge-back` 把 `main` 快进到那个版本提交并创建 `vX`——**只在发布公开之后**，且只在
+   `main` 期间没动过时（快进失败就说明构建期间有人合并了）。版本号为空时它拒绝打标签，
+   否则会打出一个只有 `v` 的发布。
+8. `cleanup` 在成功时删除 `release` 分支；失败的运行会留着它给排查的人看，下次运行会强制
+   覆盖。正式版发布还会撤下 `nightly` 发布与标签：用 nightly 的人离正式版只差一条命令。
 
-**重发同一个 tag**：dispatch 时填 `tag`，会复用该 tag 的树重新构建，并覆盖已有 release 的
-说明与资产（`gh release upload --clobber`）。
+**重发同一个 tag**（填 `tag`）会用该 tag 的树重建、用 `--clobber` 覆盖资产并刷新说明——
+不升版本、不回合并、不清理。这是资产坏掉之后的出路。
 
+**为什么是 dispatch 而不是推 tag 触发**：现在 tag 是这条流水线**产出**的，`push: tags: v*`
+的触发会让它在 merge-back 那一步重新进入自己。
 ## Nightly
 
 - 每天 04:00 UTC 构建 `main`；`nightly` 是**移动 tag**，每次先删掉旧 release 与 tag
@@ -56,7 +58,8 @@
 - 什么时候跳过：`nightly` 已经指向同一个 commit；或者 HEAD 本身带着 `v*` 发布 tag
   （那次发布已经覆盖它了）。跳过时写一条 `GITHUB_STEP_SUMMARY` 说明原因，
   免得"什么都没构建"被误读成"什么都验过了"。
-- 中间产物保留 1 天。
+- 中间产物保留 1 天；正式版发布会删掉 `nightly` 发布与标签（`publish.yml` 的最后一个
+  job）——用 nightly 的人离正式版只差一条命令，两个都留着等于让他们继续装昨天的构建。
 
 ## 分支清理
 
@@ -145,6 +148,7 @@ docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:latest -color
   NSIS 端到端测试）仍只在本地按需运行，见 `docs/WINDOWS.md`。
 - **不给 pacor 自身做 macOS 签名/公证**。发布的是 CLI 二进制；`codesign`/`notarytool`
   是 pacor 给用户产物做的事（`--target macos`），与它自己的构建无关。
-- **不猜版本号**：`bump.yml` 要求显式 `version`。
+- **不接受手写的版本号**：版本由 `bump_type` × `release_channel` 算出，因此版本号所在的
+  三处（清单、lock 文件、tag）不可能互相矛盾。
 - **不测 Windows-arm64 交叉构建的工具链**：`aarch64-pc-windows-msvc` 依赖
   `windows-latest` 镜像自带的 ARM64 MSVC 工具链，这一点和改造前一致。

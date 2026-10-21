@@ -1,116 +1,295 @@
 name: "Publish Release"
 
-# Release from a tag, not from a branch: the tag is what the version in `Cargo.toml`
-# names, and the `verify` job below refuses to build one that disagrees. Dispatching
-# this workflow by hand re-publishes an existing tag (a broken asset, a failed upload)
-# without inventing a new version.
+# One entry point for a release. Dispatch it, choose how the version moves and which channel
+# it goes to, and it does the rest: bump, check, build six platforms, publish a draft that
+# only becomes public once its assets are there, fast-forward `main`, tag the released
+# commit, and delete the temporary branch.
+#
+# It is dispatch-only on purpose. The tag is now *produced* by this workflow, so a
+# `push: tags: v*` trigger would re-enter itself in the merge-back job. Re-publishing an
+# existing tag is a dispatch with `tag` filled in: that skips the bump, the merge-back and
+# the tagging, and only refreshes the release's assets and notes.
+#
+# The only push to `main` is the fast-forward of the bump commit, and it happens after the
+# release is public — a failed build leaves `main` where it was. The bump commit is the one
+# commit this repository does not review through a pull request; `check` below is what
+# stands in for that review.
+
+# A release must not be cancelled halfway through an upload, and two dispatches must not race
+# on the same version.
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Existing tag to publish, e.g. v0.2.0"
+      bump_type:
+        description: "How the version moves (prerelease only increments the pre-release number; alpha/beta only)"
         required: true
+        default: "patch"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - prerelease
+      release_channel:
+        description: "Release channel (alpha/beta are published as pre-releases)"
+        required: true
+        default: "stable"
+        type: choice
+        options:
+          - stable
+          - alpha
+          - beta
+      tag:
+        description: "Re-publish this existing tag instead of bumping (e.g. v0.2.0)"
+        required: false
+        default: ""
         type: string
       compress:
-        description: "Compress the release binaries with UPX (Linux and Windows)"
+        description: "Compress the Linux and Windows binaries with UPX"
         required: false
         default: false
         type: boolean
 
-# A release must never be cancelled halfway through an upload: re-running it for the
-# same tag is the way out of a bad state, and that run has to queue behind this one.
-concurrency:
-  group: publish-${{ github.event.inputs.tag || github.ref_name }}
-  cancel-in-progress: false
-
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  TAG: ${{ github.event.inputs.tag || github.ref_name }}
-
-# Least privilege by default; the `release` job asks for the write scope it needs.
-permissions:
-  contents: read
+  RELEASE_BRANCH: release
+  # `gh` needs to know which repository it is talking to in steps without a checkout.
+  GH_REPO: ${{ github.repository }}
 
 jobs:
-  # Fails in a minute instead of after six runners have built binaries for a tag that
-  # does not match the workspace version.
-  verify:
-    name: "Verify the tag matches the workspace version"
+  # Works out the version, puts it on a temporary branch, and publishes that branch — so the
+  # six build runners and the merge-back all read the same tree, and nothing touches `main`
+  # until the release is out.
+  prepare:
+    name: "Bump and branch"
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
+    permissions:
+      contents: write
     outputs:
-      tag: ${{ steps.version.outputs.tag }}
+      mode: ${{ steps.version.outputs.mode }}
       version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
       prerelease: ${{ steps.version.outputs.prerelease }}
+      ref: ${{ steps.version.outputs.ref }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
           fetch-depth: 0
 
-      - name: Check the version
+      - name: Work out the version
         id: version
+        env:
+          BUMP: ${{ inputs.bump_type }}
+          CHANNEL: ${{ inputs.release_channel }}
+          TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
 
-          # `version` lives in `[workspace.package]`; every crate inherits it. The
-          # stream is normalised first: a CRLF checkout would otherwise stop the sed
-          # range from matching at all, and the error would look like a missing key.
-          version=$(tr -d '\r' < Cargo.toml | sed -n '/^\[workspace\.package\]$/,/^\[/p' | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n1)
-          if [[ -z "${version}" ]]; then
-            echo "::error::could not read [workspace.package] version from Cargo.toml"
-            exit 1
-          fi
+          read_version() {
+            tr -d '\r' < Cargo.toml \
+              | sed -n '/^\[workspace\.package\]$/,/^\[/p' \
+              | sed -n 's/^version = "\(.*\)"$/\1/p' \
+              | head -n1
+          }
 
-          if [[ "v${version}" != "${TAG}" ]]; then
-            echo "::error::tag ${TAG} does not match the workspace version v${version}; bump the version first (see .github/workflows/bump.yml)"
-            exit 1
-          fi
+          # npm's semver rules, because they are what people expect from "patch":
+          #   stable  + patch|minor|major   drop any pre-release, then bump that component
+          #   channel + patch|minor|major   bump the component, then enter `channel.0`
+          #   channel + prerelease          channel.0, or channel.N+1 if already there
+          bump_version() {
+            local current="$1" bump="$2" channel="$3"
+            local core="${current%%-*}" pre="" major minor patch preid="" prenum=""
 
-          # A build that finds the lock file stale fails on its own (`--locked` below and
-          # in build-binaries.yml), so nothing else has to be resolved here.
+            if [[ "${current}" == *-* ]]; then
+              pre="${current#*-}"
+              preid="${pre%%.*}"
+              [[ "${pre}" == *.* ]] && prenum="${pre#*.}"
+            fi
 
-          # `0.1.0-alpha` and friends are published as pre-releases, which also keeps
-          # them off the "latest release" slot that the updater and the badge read.
-          if [[ "${version}" == *-* ]]; then
-            prerelease=true
+            IFS=. read -r major minor patch <<< "${core}"
+
+            if [[ "${channel}" == "stable" && "${bump}" == "prerelease" ]]; then
+              echo "::error::bump_type 'prerelease' needs the alpha or beta channel"
+              return 1
+            fi
+
+            if [[ "${channel}" == "stable" ]]; then
+              case "${bump}" in
+                patch)
+                  # A pre-release of X.Y.Z *is* the patch release of X.Y.Z.
+                  [[ -z "${pre}" ]] && patch=$((patch + 1))
+                  ;;
+                minor)
+                  minor=$((minor + 1))
+                  patch=0
+                  ;;
+                major)
+                  major=$((major + 1))
+                  minor=0
+                  patch=0
+                  ;;
+              esac
+              echo "${major}.${minor}.${patch}"
+              return 0
+            fi
+
+            case "${bump}" in
+              prerelease)
+                if [[ "${preid}" == "${channel}" && -n "${prenum}" ]]; then
+                  prenum=$((prenum + 1))
+                else
+                  # A bare `-beta`, or a different channel, starts counting at .0.
+                  prenum=0
+                fi
+                ;;
+              patch)
+                patch=$((patch + 1))
+                prenum=0
+                ;;
+              minor)
+                minor=$((minor + 1))
+                patch=0
+                prenum=0
+                ;;
+              major)
+                major=$((major + 1))
+                minor=0
+                patch=0
+                prenum=0
+                ;;
+            esac
+            echo "${major}.${minor}.${patch}-${channel}.${prenum}"
+          }
+
+          if [[ -n "${TAG}" ]]; then
+            # Re-publishing: the tree at that tag must agree with the tag itself.
+            mode=republish
+            git fetch --tags --force origin
+            if ! git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+              echo "::error::no such tag: ${TAG}"
+              exit 1
+            fi
+            git checkout --detach "refs/tags/${TAG}" >/dev/null 2>&1
+            version="$(read_version)"
+            if [[ "v${version}" != "${TAG}" ]]; then
+              echo "::error::tag ${TAG} does not match the workspace version v${version}"
+              exit 1
+            fi
+            ref="${TAG}"
           else
-            prerelease=false
+            mode=bump
+            version="$(bump_version "$(read_version)" "${BUMP}" "${CHANNEL}")"
+            echo "bumping to ${version} (${CHANNEL}, ${BUMP})"
+
+            if git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; then
+              echo "::error::tag v${version} already exists"
+              exit 1
+            fi
+
+            # Only the first `version` line after `[workspace.package]`, keeping the line
+            # ending the file already uses (a CRLF checkout must stay CRLF).
+            awk -v new="${version}" '
+              {
+                line = $0
+                cr = ""
+                if (line ~ /\r$/) { cr = "\r"; sub(/\r$/, "", line) }
+                if (line == "[workspace.package]") { in_table = 1; print; next }
+                if (line ~ /^\[/) { in_table = 0; print; next }
+                if (in_table && !done && line ~ /^version = "/) {
+                  print "version = \"" new "\"" cr
+                  done = 1
+                  next
+                }
+                print
+              }
+            ' Cargo.toml > Cargo.toml.new
+            mv Cargo.toml.new Cargo.toml
+
+            # The workspace entries in Cargo.lock follow, or `--locked` builds reject the tag.
+            cargo update --workspace
+
+            git config user.name 'github-actions[bot]'
+            git config user.email 'github-actions[bot]@users.noreply.github.com'
+            git checkout -B "${RELEASE_BRANCH}"
+            git add Cargo.toml Cargo.lock
+            git commit -m "chore(release): v${version}"
+            # Forced: a previous failed run may have left the branch behind.
+            git push --force origin "${RELEASE_BRANCH}"
+            ref="${RELEASE_BRANCH}"
           fi
 
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
-          echo "publishing ${TAG} (pre-release: ${prerelease})"
+          if [[ "${version}" == *-* ]]; then prerelease=true; else prerelease=false; fi
 
-  # The same six-platform build the nightly uses.
+          echo "mode=${mode}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+          {
+            echo "## 📦 Release ${mode}"
+            echo ""
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Version | \`v${version}\` |"
+            echo "| Channel | \`${CHANNEL}\` |"
+            echo "| Pre-release | \`${prerelease}\` |"
+            echo "| Build ref | \`${ref}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Six runners are about to compile a branch that no pull request reviewed. This is what
+  # stands in for that review, and it is the same gate `pr-check` applies.
+  check:
+    name: "Check the branch"
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cargo fmt check
+        run: cargo fmt --all -- --check
+
+      - name: Cargo clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Cargo test
+        run: cargo test --workspace --locked
+
   build:
     name: "Build"
-    needs: verify
+    needs: prepare
     uses: ./.github/workflows/build-binaries.yml
     permissions:
       contents: read
     with:
-      ref: ${{ needs.verify.outputs.tag }}
-      # Off by default. `github.event.inputs` rather than `inputs`: it exists for every
-      # trigger, and a tag push simply has no such input, which compares as false.
-      compress: ${{ github.event.inputs.compress == 'true' }}
+      ref: ${{ needs.prepare.outputs.ref }}
+      compress: ${{ inputs.compress == true }}
 
   release:
-    name: "Publish ${{ needs.verify.outputs.tag }}"
-    needs: [verify, build]
+    name: "Publish ${{ needs.prepare.outputs.tag }}"
+    needs: [prepare, check, build]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.verify.outputs.tag }}
+          ref: ${{ needs.prepare.outputs.ref }}
+          # The changelog walks back to the previous tag.
           fetch-depth: 0
 
       - name: Download the binaries
@@ -123,104 +302,249 @@ jobs:
         id: range
         run: |
           set -euo pipefail
-          # The previous *stable* tag: a nightly tag is a moving target and would make
-          # the range cover the same commits twice.
-          previous=$(git describe --tags --abbrev=0 --exclude=nightly "${TAG}^" 2>/dev/null || true)
+          # The previous *stable* tag: `nightly` moves, and including it would list the same
+          # commits twice.
+          previous=$(git describe --tags --abbrev=0 --exclude=nightly HEAD^ 2>/dev/null || true)
           if [[ -z "${previous}" ]]; then
             previous=$(git rev-list --max-parents=0 HEAD)
-            echo "no earlier tag; the changelog starts at the root commit ${previous}"
+            echo "no earlier tag; the changelog starts at ${previous}"
           fi
           echo "from=${previous}" >> "$GITHUB_OUTPUT"
 
+      # Grouped by Conventional Commit prefix, because this repository's history *is* the
+      # changelog: pull requests here do not carry labels, and a label-driven generator would
+      # produce an empty body on every release. Merge commits have no prefix and are dropped.
       - name: Build the changelog
         id: changelog
-        uses: mikepenz/release-changelog-builder-action@v4
-        with:
-          configuration: ".github/changelog-configuration.json"
-          fromTag: ${{ steps.range.outputs.from }}
-          toTag: ${{ needs.verify.outputs.tag }}
-          # A repository without pull-request labels still has commits to list, and the
-          # fallback below is what turns them into notes.
-          failOnError: false
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Assemble the release notes
-        env:
-          CHANGELOG: ${{ steps.changelog.outputs.changelog }}
           FROM: ${{ steps.range.outputs.from }}
         run: |
           set -euo pipefail
 
-          # The action needs pull-request labels to group anything; a repository that
-          # merges without them gets the commit list instead of an empty section.
-          if [[ -n "${CHANGELOG}" && "${CHANGELOG}" != "No changes" ]]; then
-            printf '%s\n' "${CHANGELOG}" > notes.md
-          else
-            printf '## Changes\n\n' > notes.md
-            git log --pretty='- %s' "${FROM}..${TAG}" >> notes.md
+          log=$(git log "${FROM}..HEAD" --pretty=format:'%h %s')
+          sections="feat|🚀 Features
+          fix|🐛 Fixes
+          perf|⚡ Performance
+          refactor|♻️ Refactoring
+          docs|📖 Documentation
+          ci|👷 CI
+          test|🧪 Tests
+          style|🎨 Style
+          chore|🔧 Chores"
+
+          changelog=""
+          while IFS='|' read -r prefix title; do
+            prefix="$(echo "${prefix}" | tr -d ' ')"
+            title="${title# }"
+            [[ -z "${prefix}" ]] && continue
+            entries=$(printf '%s\n' "${log}" \
+              | grep -E "^[0-9a-f]+ ${prefix}(\([^)]*\))?!?: " \
+              | sed -E "s/^[0-9a-f]+ ${prefix}(\([^)]*\))?!?: /- /" || true)
+            if [[ -n "${entries}" ]]; then
+              changelog+="## ${title}"$'\n'"${entries}"$'\n\n'
+            fi
+          done <<< "${sections}"
+
+          if [[ -z "${changelog}" ]]; then
+            changelog="No conventional commits in this range."
           fi
-
           {
-            printf '\n### Downloads\n\n'
-            for asset in dist/pacor-*; do
-              [[ -f "${asset}" ]] || continue
-              case "${asset}" in
-                *.sha256) continue ;;
-              esac
-              printf -- '- `%s`\n' "$(basename "${asset}")"
-            done
-            printf '\nEach archive has a `.sha256` next to it, and `SHA256SUMS` lists every\n'
-            printf 'asset in a form `sha256sum -c SHA256SUMS` accepts.\n'
-          } >> notes.md
+            echo 'changelog<<CHANGELOG_EOF'
+            printf '%s' "${changelog%$'\n\n'}"
+            echo
+            echo 'CHANGELOG_EOF'
+          } >> "$GITHUB_OUTPUT"
 
-          # One combined checksum file is easier to fetch than six separate ones, and it
-          # is what a package manifest (winget, Scoop, Homebrew) wants anyway.
-          cat dist/*.sha256 > SHA256SUMS
-          echo "--- notes.md ---"
-          cat notes.md
-
-      # Draft first: a build that fails to upload must not leave a half-populated release
-      # that the "latest" badge and the updater would happily point at.
-      - name: Create or update the release
+      # Draft first: an upload that fails must not leave a half-populated release that the
+      # "latest" badge points at.
+      - name: Create the draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+          CHANGELOG: ${{ steps.changelog.outputs.changelog }}
         run: |
           set -euo pipefail
-
+          printf '%s\n' "${CHANGELOG}" > notes.md
           if [[ "${PRERELEASE}" == "true" ]]; then
             channel_args=(--prerelease --latest=false)
           else
             channel_args=(--latest)
           fi
 
+          # One combined checksum file is easier to fetch than six, and it is the format a
+          # package manifest wants anyway.
+          cat dist/*.sha256 > SHA256SUMS
+
           if gh release view "${TAG}" >/dev/null 2>&1; then
-            echo "release ${TAG} exists; replacing its notes and assets"
+            echo "release ${TAG} exists; refreshing it"
             gh release edit "${TAG}" --title "${TAG}" --notes-file notes.md "${channel_args[@]}"
           else
             gh release create "${TAG}" --draft --title "${TAG}" --notes-file notes.md "${channel_args[@]}"
           fi
-
           gh release upload "${TAG}" dist/pacor-* SHA256SUMS --clobber
-          gh release edit "${TAG}" --draft=false
 
-      - name: Create a release summary
-        if: always()
+      # The download list is rendered from the assets that actually exist, so it cannot drift
+      # from what was uploaded — and the sizes are measured, not guessed.
+      - name: Add the downloads and publish
         env:
-          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
-          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
-          ACTOR: ${{ github.actor }}
-          REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          CHANGELOG: ${{ steps.changelog.outputs.changelog }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          downloads=$(gh release view "${TAG}" --json assets \
+            --jq '.assets[] | "\(.name)\t\(.size)"' \
+            | sort \
+            | awk -F'\t' '{ printf "- `%s` — %.1f MB\n", $1, $2 / 1048576 }')
+
+          {
+            printf '%s\n\n' "${CHANGELOG}"
+            printf '### Downloads\n\n'
+            printf '%s\n\n' "${downloads}"
+            printf 'Each archive has a `.sha256` next to it, and `SHA256SUMS` lists every asset\n'
+            printf 'in a form `sha256sum -c SHA256SUMS` accepts.\n'
+          } > notes.md
+
+          gh release edit "${TAG}" --notes-file notes.md --draft=false
+
+      # A pre-release is a test build: the updater only ever sees the newest one, and the
+      # older ones on the page are invitations to install the wrong thing. The tags stay, so
+      # the history is still reproducible from source.
+      - name: Drop older pre-releases
+        if: needs.prepare.outputs.prerelease == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEEP: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release list --exclude-drafts --limit 100 --json tagName,isPrerelease \
+            --jq '.[] | select(.isPrerelease) | .tagName' \
+            | while read -r tag; do
+                [[ -z "${tag}" || "${tag}" == "${KEEP}" ]] && continue
+                echo "dropping ${tag}"
+                gh release delete "${tag}" --yes
+              done
+
+  # Fast-forward only: the release branch is `main` plus the bump commit, so anything else
+  # means `main` moved while the release was building — better to stop than to merge blind.
+  merge-back:
+    name: "Merge the bump back"
+    needs: [prepare, release]
+    if: success() && needs.prepare.outputs.mode == 'bump'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Merge the release branch and tag it
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # The reference workflow once tagged a release "v" because this was empty; the
+          # check is cheap and the failure it prevents is not.
+          if [[ -z "${VERSION}" ]]; then
+            echo "::error::the version is empty; refusing to tag a release"
+            exit 1
+          fi
+
+          base="${{ github.event.repository.default_branch }}"
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+
+          git fetch origin "refs/heads/${RELEASE_BRANCH}:refs/remotes/origin/${RELEASE_BRANCH}"
+          git checkout -B "${base}" "origin/${base}"
+          git merge --ff-only "origin/${RELEASE_BRANCH}"
+
+          git tag "v${VERSION}"
+          git push origin "${base}" "v${VERSION}"
+          echo "merged the bump into ${base} and tagged v${VERSION}"
+
+  # Only on success: a failed run leaves the branch behind so the next attempt (and whoever
+  # is debugging it) can look at what was built. The next run force-pushes over it anyway.
+  cleanup:
+    name: "Delete the release branch"
+    needs: [prepare, merge-back]
+    if: success() && needs.prepare.outputs.mode == 'bump'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Delete the branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${RELEASE_BRANCH}" 2>/dev/null; then
+            echo "deleted ${RELEASE_BRANCH}"
+          else
+            echo "::notice::${RELEASE_BRANCH} was already gone"
+          fi
+
+  # Users on the nightly are one command away from a stable release; leaving both published
+  # means they keep installing yesterday's build.
+  drop-nightly:
+    name: "Retire the nightly"
+    needs: [prepare, release]
+    if: success() && needs.prepare.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Delete the nightly release and tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view nightly >/dev/null 2>&1; then
+            gh release delete nightly --cleanup-tag --yes
+            echo "retired the nightly"
+          else
+            echo "no nightly release; nothing to retire"
+          fi
+
+  summary:
+    name: "Summary"
+    needs: [prepare, check, build, release, merge-back, cleanup, drop-nightly]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Write the summary
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          MODE: ${{ needs.prepare.outputs.mode }}
+          CHANNEL: ${{ inputs.release_channel }}
         run: |
           {
-            echo "## 🚀 ${TAG}"
+            echo "## 🎉 Release v${VERSION}"
             echo ""
             echo "| | |"
             echo "| --- | --- |"
-            echo "| Version | \`${RELEASE_VERSION}\` |"
-            echo "| Pre-release | \`${PRERELEASE}\` |"
-            echo "| Triggered by | @${ACTOR} |"
+            echo "| Mode | \`${MODE}\` |"
+            echo "| Channel | \`${CHANNEL}\` |"
+            echo "| Check | ${{ needs.check.result }} |"
+            echo "| Build | ${{ needs.build.result }} |"
+            echo "| Publish | ${{ needs.release.result }} |"
+            echo "| Merge back | ${{ needs.merge-back.result }} |"
+            echo "| Cleanup | ${{ needs.cleanup.result }} |"
+            echo "| Triggered by | @${{ github.actor }} |"
             echo ""
-            echo "[View the release](https://github.com/${REPOSITORY}/releases/tag/${TAG})"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "${{ needs.release.result }}" == "success" ]]; then
+            echo "Published: https://github.com/${GITHUB_REPOSITORY}/releases/tag/v${VERSION}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The release failed or was cancelled; \`main\` was not touched." >> "$GITHUB_STEP_SUMMARY"
+          fi
