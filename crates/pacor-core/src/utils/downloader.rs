@@ -593,7 +593,7 @@ mod tests {
 
     use super::*;
 
-    // ==================== Release URL 解析测试 ====================
+    // ==================== Release URL parsing tests ====================
 
     #[test]
     fn test_parse_github_release_url_valid() {
@@ -648,7 +648,7 @@ mod tests {
         );
     }
 
-    // ==================== Raw URL 解析测试 ====================
+    // ==================== Raw URL parsing tests ====================
 
     #[test]
     fn test_parse_github_raw_url_simple_format() {
@@ -714,7 +714,7 @@ mod tests {
         assert!(parse_github_raw_url("https://raw.example.com/user/repo/main/file").is_none());
     }
 
-    // ==================== 镜像 URL 构建测试 ====================
+    // ==================== Mirror URL construction tests ====================
 
     #[test]
     fn test_build_release_mirror_url_with_template() {
@@ -854,7 +854,7 @@ mod tests {
         assert!(build_mirror_url_from_template(url).is_none());
     }
 
-    // ==================== 替代下载信息测试 ====================
+    // ==================== Alternative download source tests ====================
 
     #[test]
     fn test_resolve_mirror_url_with_mirror() {
@@ -899,7 +899,7 @@ mod tests {
         );
     }
 
-    // ==================== 集成测试 ====================
+    // ==================== Integration tests ====================
 
     #[test]
     fn test_prepare_download_with_mirror() {
@@ -945,13 +945,13 @@ mod tests {
                 let url = "https://github.com/user/repo/releases/download/v1/file";
                 let (_, final_url) = prepare_download(url);
 
-                // 模板优先级高于基础 URL
+                // The template takes precedence over the base URL
                 assert!(final_url.starts_with("https://template.com"));
             },
         );
     }
 
-    // ==================== 断点续传测试 ====================
+    // ==================== Resumed transfer tests ====================
 
     /// A one-file HTTP server, so the resume logic is exercised against a real
     /// socket instead of a mock.

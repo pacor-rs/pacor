@@ -26,7 +26,8 @@ impl From<Vec<&str>> for PlistValue {
     }
 }
 
-// NOTE: BTreeMap 使用字典序排列，因此最终的key顺序可能与原文件不一致
+// NOTE: `BTreeMap` orders keys lexicographically, so the resulting key order may differ
+// from the original file.
 pub(super) struct Plist(BTreeMap<String, PlistValue>);
 
 impl Plist {
@@ -38,7 +39,7 @@ impl Plist {
         while let Some(line) = lines.next() {
             let trimmed = line.trim();
 
-            // 检查是否是键
+            // Is this a key?
             if trimmed.starts_with("<key>") && trimmed.ends_with("</key>") {
                 let key = trimmed
                     .trim_start_matches("<key>")
@@ -46,7 +47,7 @@ impl Plist {
                     .to_string();
                 current_key = Some(key);
             }
-            // 检查是否是字符串值
+            // Is this a string value?
             else if trimmed.starts_with("<string>") && trimmed.ends_with("</string>") {
                 if let Some(key) = current_key.take() {
                     let value = trimmed
@@ -56,7 +57,7 @@ impl Plist {
                     result.insert(key, PlistValue::String(value));
                 }
             }
-            // 检查是否是数组开始
+            // Is this the start of an array?
             else if trimmed == "<array>"
                 && let Some(key) = current_key.take()
             {
