@@ -5,6 +5,18 @@ name: "Cache Warming"
 # that arrives next then compiles the whole workspace from scratch. Building the caches
 # here, ahead of time, keeps the first pull request after such a change as fast as the
 # tenth.
+#
+# This workflow is the only writer for the pull-request jobs, and that is a correctness
+# requirement rather than tidiness: a cache written by a pull request is scoped to that
+# pull request's merge ref, so no other pull request can restore it — the job next door
+# reports `Cache not found` for a key that was saved minutes earlier, by a run that had the
+# same `Cargo.lock` and the same toolchain. Only a run on `main` produces entries that every
+# pull request can read.
+#
+# Every entry is keyed by target, host ones included, because every job in pr-check.yml
+# passes `--target` explicitly. `target/<triple>/…` is a path this workflow can fill in for
+# another platform's job; a plain `target/debug` could only ever be written by the very job
+# that would have read it, which is what made the old host-only keys unshareable.
 on:
   push:
     branches:
@@ -43,10 +55,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
+        # The host triple is written out even though it *is* the host: pr-check.yml passes
+        # `--target` for the host jobs too, and a cache whose path has no triple in it is
+        # one this job could never fill for somebody else.
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v7
 
@@ -56,8 +74,20 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      # `actions/cache` rather than `actions/cache/restore`: this job exists to *write*
-      # the entries the pull-request jobs only read. The keys are byte-for-byte the ones
+      # If `macos-latest` or `windows-latest` ever moves to another architecture, the matrix
+      # above starts warming keys nobody reads — and everything keeps looking green. Fail
+      # here instead.
+      - name: Assert the target is this runner's host
+        shell: bash
+        run: |
+          host="$(rustc -vV | sed -n 's/^host: //p')"
+          if [[ "${host}" != "${{ matrix.target }}" ]]; then
+            echo "::error::${{ matrix.target }} is not this runner's host (${host}): update the matrix here and in pr-check.yml"
+            exit 1
+          fi
+
+      # `actions/cache` rather than `actions/cache/restore`: this job exists to *write* the
+      # entries the pull-request jobs only read. The keys are byte-for-byte the ones
       # pr-check.yml uses, otherwise warming would create a parallel set nothing reads.
       - name: Cache cargo registry
         uses: actions/cache@v5
@@ -75,37 +105,101 @@ jobs:
         uses: actions/cache@v5
         with:
           path: |
-            target/debug/.fingerprint
-            target/debug/deps
-            target/debug/build
-          key: ${{ runner.os }}-rust-debug-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+            target/${{ matrix.target }}/debug/.fingerprint
+            target/${{ matrix.target }}/debug/deps
+            target/${{ matrix.target }}/debug/build
+          key: ${{ runner.os }}-rust-debug-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-rust-debug-${{ steps.rust-toolchain.outputs.cachekey }}-
+            ${{ runner.os }}-rust-debug-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-
 
       - name: Cache release build
         uses: actions/cache@v5
         with:
           path: |
-            target/release/.fingerprint
-            target/release/deps
-            target/release/build
-          key: ${{ runner.os }}-rust-release-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+            target/${{ matrix.target }}/release/.fingerprint
+            target/${{ matrix.target }}/release/deps
+            target/${{ matrix.target }}/release/build
+          key: ${{ runner.os }}-rust-release-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-rust-release-${{ steps.rust-toolchain.outputs.cachekey }}-
+            ${{ runner.os }}-rust-release-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-
 
       - name: Fetch dependencies
         run: cargo fetch --locked
 
-      # Exactly the commands the pull-request jobs run, so the fingerprints they look
-      # for are the ones that exist. Clippy writes its own (per-lint) fingerprints; a
-      # plain `cargo build` would not warm them.
+      # Exactly the commands the pull-request jobs run. Clippy writes its own (per-lint)
+      # fingerprints, so a plain `cargo build` would not warm them; `--target` is part of
+      # the fingerprint as well, so a command that differs by a flag warms nothing either.
       - name: Build and lint
         run: |
-          cargo build --workspace --tests --locked
-          cargo clippy --workspace --all-targets --locked -- -D warnings
-          cargo build --workspace --release --locked
+          cargo build --workspace --tests --locked --target ${{ matrix.target }}
+          cargo clippy --workspace --all-targets --locked --target ${{ matrix.target }} -- -D warnings
+          cargo build --workspace --release --locked --target ${{ matrix.target }}
 
       # The release lint pass only runs on Linux in CI, so only Linux pays for it here.
       - name: Lint the release profile
         if: runner.os == 'Linux'
-        run: cargo clippy --workspace --all-targets --release --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --release --locked --target ${{ matrix.target }} -- -D warnings
+
+  # `cross-check` reads these, and it is the job that would otherwise compile four targets
+  # from scratch on every pull request — its own writes are invisible to the next pull
+  # request, so without this the only way to warm them would be to make the same mistake
+  # again. The release equivalents are not warmed here: `nightly` builds all six targets
+  # every day and its caches live on `main` too.
+  warm-cross:
+    name: "Warm caches (${{ matrix.target }})"
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-pc-windows-msvc
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+          - aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Rust
+        id: rust-toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Read-only here on purpose: the registry is target-independent and the three `warm`
+      # jobs above already save it. Four matrix entries writing one key would only race.
+      - name: Cache cargo registry
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-registry-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache target build
+        uses: actions/cache@v5
+        with:
+          path: |
+            target/${{ matrix.target }}/debug/.fingerprint
+            target/${{ matrix.target }}/debug/deps
+            target/${{ matrix.target }}/debug/build
+          key: ${{ runner.os }}-rust-debug-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-debug-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+
+      # `ring`, the crypto backend of rustls, compiles a little C: this is the only cross
+      # target here that does not already have a compiler for it on PATH.
+      - name: Install the ARM64 C compiler
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      # Byte for byte the command `cross-check` runs, `RUSTFLAGS` included: it is part of
+      # cargo's fingerprint, and `cargo check` takes no rustc arguments.
+      - name: Cargo check for target
+        env:
+          RUSTFLAGS: "-D warnings"
+        run: cargo check --workspace --all-targets --locked --target ${{ matrix.target }}

@@ -83,16 +83,21 @@ ref 本来就不存在算成功：如果仓库开启了"自动删除头分支"�
 
 ```
 <os>-cargo-registry-<cachekey>-<hash(Cargo.lock)>
-<os>-rust-debug-<cachekey>-<hash(Cargo.lock)>
-<os>-rust-release-<cachekey>-<hash(Cargo.lock)>
+<os>-rust-debug-<target>-<cachekey>-<hash(Cargo.lock)>
 <os>-rust-release-<target>-<cachekey>-<hash(Cargo.lock)>
-<os>-rust-cross-<target>-<cachekey>-<hash(Cargo.lock)>
 ```
 
-前三族是宿主 triple，由 `warm-cache.yml` 写，这是 PR 保持快速的来源。后两族带 target，
-由**读它们的那些作业自己写**——`build-binaries`（每次 nightly 与发版）和 `cross-check`。
-之所以值得，是因为 nightly 每天都构建全部六个目标：`Cargo.lock` 变动后的第一次运行
-付出上传成本，之后每次都是恢复。
+三族，而且是**每一族都带 target**——宿主作业也一样，因为 `pr-check` 里每个作业都显式
+传 `--target`，哪怕它指的就是自己所在的那台机器。`target/<triple>/…` 是
+`warm-cache.yml` 能为别的平台的作业填好的路径；而 `target/debug` 只有**跑它的那个
+作业自己**才能写。
+
+正因如此写方只能有一个，也必须只有一个：PR 里写出的缓存属于该 PR 的 merge ref，
+隔壁的 PR 会对着同一个 `Cargo.lock`、同一个工具链、几分钟前刚存下的键报
+`Cache not found`。所以 `pr-check` 的每个作业都是读者（`actions/cache/restore`），
+写发生在 `main` 上：`warm-cache.yml` 为三个平台构建宿主 debug/release 条目，外加
+`cross-check` 要读的那四个 debug 条目；`build-binaries` 在每次 nightly 与发版时写
+`rust-release-<target>`——同样在 `main` 上。
 
 几条规则，都是踩过才写下来的：
 
@@ -102,13 +107,9 @@ ref 本来就不存在算成功：如果仓库开启了"自动删除头分支"�
   走网络。
 - **`CARGO_INCREMENTAL=0`**。增量数据不在缓存路径里，开着只会让恢复出来的目录更大，
   并在恢复后打印一条 "could not be used" 警告。
-- **每个缓存步骤要么自己写，要么与别人共用一族**。`warm-cache.yml` 对宿主 triple 的
-  三族用 `actions/cache`（读+写），`build-binaries` 与 `cross-check` 对各自的 per-target
-  键同样用它。没有任何地方单独使用 `actions/cache/restore`：只读的步骤是一个永远不可能
-  命中的缓存，而这两个工作流里曾经有两条这样的步骤，文档还把它们当成了有效配置。
-- GitHub 对每个仓库的缓存有 10 GB 上限，超了就按 LRU **静默驱逐**，通常正好发生在需要它的
-  那个 PR 之前。`cleanup-old-caches.yml` 按"键的最后一个 `-` 之前"分族（正好等于
-  `restore-keys` 的前缀），每族只留最新一条。
+- **写方绝不能是 PR**。它的缓存落在 `refs/pull/<n>/merge` 之下：别的 PR 读不到，
+  分支一删就作废。`warm-cache.yml` 因此由 `push` 到 `main` 触发，且它的键与
+  PR 作业请求的键逐字节一致。
 
 ## 漂移防护
 
@@ -162,8 +163,6 @@ docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:latest -color
   三处（清单、lock 文件、tag）不可能互相矛盾。
 - **不测 Windows-arm64 交叉构建的工具链**：`aarch64-pc-windows-msvc` 依赖
   `windows-latest` 镜像自带的 ARM64 MSVC 工具链，这一点和改造前一致。
-- **不在 `warm-cache.yml` 里预热 release 构建**，因为那些缓存是 per-target 的
-  （`target/<triple>/release/`），由使用它们的构建自己写。`nightly` 每天构建全部六个
-  目标，所以 nightly 本身就是预热器；发版会 bump `Cargo.lock`、精确键必然 miss，靠
-  `restore-keys` 恢复后只重编工作区自己的 crate。`cross-check` 出于同样理由保留自己的
-  debug 缓存。
+- **不预热跨平台的 release 构建**。`warm-cache.yml` 只预热宿主的 release 条目与四个跨平台的
+  debug 条目；六个目标的 release 二进制由 `nightly` 每天从 `main` 生成，它会把
+  `rust-release-<target>` 填好。再预热一遍等于把同样六个构建跑两次。

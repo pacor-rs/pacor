@@ -74,10 +74,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
+        # The host triple is written out even though it *is* the host: the cache path
+        # has to be the same shape as the cross ones, otherwise `warm-cache.yml` could
+        # not pre-build it — `target/debug` is only reachable by the job that runs
+        # here, and a cache written by a pull request belongs to that pull request.
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v7
 
@@ -86,6 +93,18 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
+      # The triple is checked rather than assumed: `macos-latest` moving to another
+      # architecture would silently key every cache under a name nothing reads, and the job
+      # would keep passing.
+      - name: Assert the target is this runner's host
+        shell: bash
+        run: |
+          host="$(rustc -vV | sed -n 's/^host: //p')"
+          if [[ "${host}" != "${{ matrix.target }}" ]]; then
+            echo "::error::${{ matrix.target }} is not this runner's host (${host}): update the matrix here and in pr-check.yml"
+            exit 1
+          fi
 
       - name: Cache cargo registry
         uses: actions/cache/restore@v5
@@ -103,39 +122,39 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: |
-            target/debug/.fingerprint
-            target/debug/deps
-            target/debug/build
-          key: ${{ runner.os }}-rust-debug-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+            target/${{ matrix.target }}/debug/.fingerprint
+            target/${{ matrix.target }}/debug/deps
+            target/${{ matrix.target }}/debug/build
+          key: ${{ runner.os }}-rust-debug-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
           # The toolchain stays in the fallback prefix: artifacts built by another rustc
           # are unusable (cargo's fingerprints include it), so restoring them only costs
           # a large download. A toolchain update means one honest cold build instead.
           restore-keys: |
-            ${{ runner.os }}-rust-debug-${{ steps.rust-toolchain.outputs.cachekey }}-
+            ${{ runner.os }}-rust-debug-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-
 
       - name: Cache release build
         uses: actions/cache/restore@v5
         with:
           path: |
-            target/release/.fingerprint
-            target/release/deps
-            target/release/build
-          key: ${{ runner.os }}-rust-release-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+            target/${{ matrix.target }}/release/.fingerprint
+            target/${{ matrix.target }}/release/deps
+            target/${{ matrix.target }}/release/build
+          key: ${{ runner.os }}-rust-release-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-rust-release-${{ steps.rust-toolchain.outputs.cachekey }}-
+            ${{ runner.os }}-rust-release-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-
 
       - name: Cargo fmt check
         run: cargo fmt --all -- --check
 
       # `--all-targets` so test code is linted too, not only the libraries and binaries.
       - name: Cargo clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked --target ${{ matrix.target }} -- -D warnings
 
       - name: Cargo test
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --target ${{ matrix.target }}
 
       - name: Cargo build (release)
-        run: cargo build --workspace --release --locked
+        run: cargo build --workspace --release --locked --target ${{ matrix.target }}
 
   # The release profile compiles different code: `panic = "abort"`, LTO and — the part
   # that actually hides mistakes — `#[cfg(debug_assertions)]`, which gates the `trace`
@@ -145,6 +164,10 @@ jobs:
   release-lints:
     name: "Rust Lints (release profile)"
     runs-on: ubuntu-latest
+    env:
+      # Named once: it is in the cache key, so a wrong value means warming one entry
+      # and reading another.
+      TARGET: x86_64-unknown-linux-gnu
     needs: detect-changes
     if: needs.detect-changes.outputs.code == 'true' || needs.detect-changes.outputs.workflow == 'true'
     timeout-minutes: 40
@@ -173,15 +196,15 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: |
-            target/release/.fingerprint
-            target/release/deps
-            target/release/build
-          key: ${{ runner.os }}-rust-release-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+            target/${{ env.TARGET }}/release/.fingerprint
+            target/${{ env.TARGET }}/release/deps
+            target/${{ env.TARGET }}/release/build
+          key: ${{ runner.os }}-rust-release-${{ env.TARGET }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-rust-release-${{ steps.rust-toolchain.outputs.cachekey }}-
+            ${{ runner.os }}-rust-release-${{ env.TARGET }}-${{ steps.rust-toolchain.outputs.cachekey }}-
 
       - name: Cargo clippy (release)
-        run: cargo clippy --workspace --all-targets --release --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --release --locked --target "${TARGET}" -- -D warnings
 
   # No C dependencies (compression uses the pure-Rust `zlib-rs` backend), so the other
   # targets can be checked without any cross toolchain — far earlier than the release
@@ -223,19 +246,19 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
 
-      # Written here rather than merely restored: nothing else produces this key, and a cold
-      # `cargo check` per target is about 40 s, so the entry pays for itself on the next pull
-      # request that touches no dependency.
+      # Read-only: `warm-cache.yml` writes this family from `main`. Writing it here would be
+      # pointless — a cache saved by a pull request is scoped to that pull request's merge
+      # ref, so the next pull request still compiles from scratch.
       - name: Cache target build
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: |
             target/${{ matrix.target }}/debug/.fingerprint
             target/${{ matrix.target }}/debug/deps
             target/${{ matrix.target }}/debug/build
-          key: ${{ runner.os }}-rust-cross-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-rust-debug-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-rust-cross-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+            ${{ runner.os }}-rust-debug-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-
 
       # `ring`, the crypto backend of rustls, compiles a little C: this is the only cross
       # target here that does not already have a compiler for it on PATH.
