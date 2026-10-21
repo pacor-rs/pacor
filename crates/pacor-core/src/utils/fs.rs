@@ -24,6 +24,13 @@ pub fn copy_directory_with_parent(src: &Path, dst: &Path) -> Result<()> {
 /// Unlike the previous implementation this propagates copy failures instead of
 /// logging and silently skipping entries.
 pub fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
+    // The destination is created here instead of trusting the caller: `read_dir` returns
+    // entries in whatever order the filesystem prefers (APFS handed back the executable
+    // before the directories), and copying a file into a directory that does not exist yet
+    // fails with ENOENT. `AppDir::populate` is exactly such a caller — it copies the Flutter
+    // bundle into `usr/`, which does not exist yet at that point.
+    fs::create_dir_all(dst)?;
+
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let src_path = entry.path();
@@ -160,6 +167,28 @@ mod tests {
     use super::*;
     use std::fs as stdfs;
     use tempfile::TempDir;
+
+    /// A destination that does not exist yet, with a source whose first entry is a file: the
+    /// copy used to run `fs::copy` before anything created `dst`, so it only worked when the
+    /// filesystem happened to list a directory first. APFS lists the executable first, which
+    /// is how this failed on macOS and nowhere else.
+    #[test]
+    fn copy_dir_creates_the_destination_itself() {
+        let temp = TempDir::new().unwrap();
+        let src = temp.path().join("bundle");
+        let dst = temp.path().join("usr");
+
+        stdfs::create_dir_all(&src).unwrap();
+        // Only a file, so the very first entry cannot be a directory.
+        stdfs::write(src.join("demo"), "#!/bin/sh\n").unwrap();
+
+        copy_dir(&src, &dst).unwrap();
+
+        assert_eq!(
+            stdfs::read_to_string(dst.join("demo")).unwrap(),
+            "#!/bin/sh\n"
+        );
+    }
 
     #[test]
     fn directory_size_sums_files_recursively() {
