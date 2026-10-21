@@ -289,9 +289,9 @@ cargo check --workspace --target aarch64-apple-darwin
 
 ## Continuous integration
 
-Seven workflows under `.github/workflows` cover the checks, the release and cache
-housekeeping; **[docs/CI.md](docs/CI.md)** describes each of them, the release
-procedure and the caching scheme.
+Eight workflows under `.github/workflows` cover the checks, the release, cache
+housekeeping and branch cleanup; **[docs/CI.md](docs/CI.md)** describes each of them, the
+release procedure and the caching scheme.
 
 In short: a pull request runs `fmt`, `clippy`, the test suite and a release build on
 Linux, macOS and Windows, plus a release-profile lint pass (the `#[cfg(debug_assertions)]`
