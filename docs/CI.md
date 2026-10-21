@@ -103,12 +103,15 @@ dtolnay/rust-toolchain):
 <os>-cargo-registry-<cachekey>-<hash(Cargo.lock)>
 <os>-rust-debug-<cachekey>-<hash(Cargo.lock)>
 <os>-rust-release-<cachekey>-<hash(Cargo.lock)>
+<os>-rust-release-<target>-<cachekey>-<hash(Cargo.lock)>
+<os>-rust-cross-<target>-<cachekey>-<hash(Cargo.lock)>
 ```
 
-All three are host-triple families — they are what `pr-check` reads, and the only
-ones `warm-cache.yml` writes. A cache whose path is `target/<triple>/…` would have
-to carry the triple in its key *and* be warmed by building that target here; that
-is the shape of the release builds, and they run cold on purpose (see below).
+The first three are host-triple and are written by `warm-cache.yml`; that is what keeps
+pull requests fast. The last two are per-target and are written by the jobs that read
+them — `build-binaries` (every nightly, and the release) and `cross-check`. They are
+worth it because nightly builds all six targets every day: the first run after a
+`Cargo.lock` change pays for the upload, every one after it restores.
 
 A few rules, each of which was written down after being learned the hard way:
 
@@ -119,10 +122,11 @@ A few rules, each of which was written down after being learned the hard way:
   target cache hit also means `cargo fetch` need not touch the network.
 - **`CARGO_INCREMENTAL=0`.** Incremental data is not part of the cached paths; leaving it on
   only makes the restored directory bigger and prints a "could not be used" warning.
-- **`warm-cache.yml` is the only writer.** It uses `actions/cache` (read + write) and
-  every other workflow uses `actions/cache/restore` (read only), so its keys have to be
-  byte-identical to `pr-check`'s — a warmer with a key of its own writes a set nobody
-  reads, and a restore-only key that nothing saves is worse than no cache step at all.
+- **Every cache step either saves or shares.** `warm-cache.yml` uses `actions/cache`
+  (read + write) for the host-triple families, and `build-binaries` and `cross-check`
+  use it for their own per-target keys. Nothing uses `actions/cache/restore` alone: a
+  restore-only step is a cache that can never hit, and two of them sat in these
+  workflows described as if they worked.
 - GitHub caps each repository at 10 GB of caches and evicts **silently** by LRU when that is
   exceeded, usually right before the pull request that needs the cache.
   `cleanup-old-caches.yml` groups keys by "everything before the last `-`" (exactly the
@@ -189,12 +193,9 @@ docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:latest -color
 - **It does not test the toolchain for the Windows-arm64 cross build**:
   `aarch64-pc-windows-msvc` relies on the ARM64 MSVC toolchain that the `windows-latest` image
   ships, exactly as before this rework.
-- **It does not warm the release builds.** `build-binaries.yml` compiles with an
-  explicit `--target` into `target/<triple>/release/`, which the warming job does not
-  produce, so those keys would need a warm matrix of their own — six cross builds on
-  every dependency change, to shorten a release that is dispatched by hand a few times
-  a year. `publish` also bumps `Cargo.lock`, so an exact-key entry would be invalid by
-  the time it is needed. The release build is cold, deliberately. The per-target cache
-  steps that used to sit in `cross-check` and `build-binaries` were removed for this
-  reason: nothing wrote them, so they only made the workflows look warmer than they
-  were.
+- **It does not warm the release builds from `warm-cache.yml`**, because those caches
+  are per-target (`target/<triple>/release/`) and the builds that use them write them.
+  `nightly` builds all six targets daily, so nightly *is* the warmer; a release, which
+  bumps `Cargo.lock` and therefore misses the exact key, restores through
+  `restore-keys` and recompiles only the workspace crates. The cross-check keeps its
+  own debug caches for the same reason.

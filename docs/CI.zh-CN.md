@@ -85,11 +85,14 @@ ref 本来就不存在算成功：如果仓库开启了"自动删除头分支"�
 <os>-cargo-registry-<cachekey>-<hash(Cargo.lock)>
 <os>-rust-debug-<cachekey>-<hash(Cargo.lock)>
 <os>-rust-release-<cachekey>-<hash(Cargo.lock)>
+<os>-rust-release-<target>-<cachekey>-<hash(Cargo.lock)>
+<os>-rust-cross-<target>-<cachekey>-<hash(Cargo.lock)>
 ```
 
-三族全是宿主 triple——它们正是 `pr-check` 读的，也是 `warm-cache.yml` 唯一写的。
-路径为 `target/<triple>/…` 的缓存必须把 triple 写进键里，并且要在预热时就地构建那个
-目标；那是 release 构建的形状，而 release 是**刻意**冷跑的（见下）。
+前三族是宿主 triple，由 `warm-cache.yml` 写，这是 PR 保持快速的来源。后两族带 target，
+由**读它们的那些作业自己写**——`build-binaries`（每次 nightly 与发版）和 `cross-check`。
+之所以值得，是因为 nightly 每天都构建全部六个目标：`Cargo.lock` 变动后的第一次运行
+付出上传成本，之后每次都是恢复。
 
 几条规则，都是踩过才写下来的：
 
@@ -99,9 +102,10 @@ ref 本来就不存在算成功：如果仓库开启了"自动删除头分支"�
   走网络。
 - **`CARGO_INCREMENTAL=0`**。增量数据不在缓存路径里，开着只会让恢复出来的目录更大，
   并在恢复后打印一条 "could not be used" 警告。
-- **`warm-cache.yml` 是唯一的写方**。它用 `actions/cache`（读+写），其它工作流一律
-  `actions/cache/restore`（只读），所以它的键必须与 `pr-check` 逐字节一致——自己另起
-  一套键的预热只会写出一堆没人读的缓存。而一个没人写的只读键比没有缓存步骤更糟。
+- **每个缓存步骤要么自己写，要么与别人共用一族**。`warm-cache.yml` 对宿主 triple 的
+  三族用 `actions/cache`（读+写），`build-binaries` 与 `cross-check` 对各自的 per-target
+  键同样用它。没有任何地方单独使用 `actions/cache/restore`：只读的步骤是一个永远不可能
+  命中的缓存，而这两个工作流里曾经有两条这样的步骤，文档还把它们当成了有效配置。
 - GitHub 对每个仓库的缓存有 10 GB 上限，超了就按 LRU **静默驱逐**，通常正好发生在需要它的
   那个 PR 之前。`cleanup-old-caches.yml` 按"键的最后一个 `-` 之前"分族（正好等于
   `restore-keys` 的前缀），每族只留最新一条。
@@ -158,9 +162,8 @@ docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:latest -color
   三处（清单、lock 文件、tag）不可能互相矛盾。
 - **不测 Windows-arm64 交叉构建的工具链**：`aarch64-pc-windows-msvc` 依赖
   `windows-latest` 镜像自带的 ARM64 MSVC 工具链，这一点和改造前一致。
-- **不预热 release 构建**。`build-binaries.yml` 显式带 `--target` 编译，产物落在
-  `target/<triple>/release/`，预热任务并不产出它；要预热就得自己再跑一套矩阵——每次
-  依赖变动多出六个交叉构建，只为省下一次手动触发、一年才几次的发版时间。何况
-  `publish` 会 bump `Cargo.lock`，精确键在需要它的那一刻早已失效。release 构建是冷
-  的，这是刻意的取舍。原先 `cross-check` 与 `build-binaries` 里的 per-target 缓存步骤
-  正是因此删掉的：没人写它们，只让工作流看起来比实际更暖。
+- **不在 `warm-cache.yml` 里预热 release 构建**，因为那些缓存是 per-target 的
+  （`target/<triple>/release/`），由使用它们的构建自己写。`nightly` 每天构建全部六个
+  目标，所以 nightly 本身就是预热器；发版会 bump `Cargo.lock`、精确键必然 miss，靠
+  `restore-keys` 恢复后只重编工作区自己的 crate。`cross-check` 出于同样理由保留自己的
+  debug 缓存。
