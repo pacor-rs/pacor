@@ -362,6 +362,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag }}
           VERSION: ${{ needs.prepare.outputs.version }}
+          MODE: ${{ needs.prepare.outputs.mode }}
           PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
           CHANGELOG: ${{ steps.changelog.outputs.changelog }}
         run: |
@@ -373,6 +374,16 @@ jobs:
             channel_args=(--latest)
           fi
 
+          # Only a bump run has a release branch to point the tag at. A re-publish
+          # starts from an existing tag, and naming a branch that does not exist is a
+          # 422 ("Release target_commitish is invalid") rather than a fallback to the
+          # tag — which is how the first re-publish of an old tag failed.
+          if [[ "${MODE}" == "bump" ]]; then
+            target_args=(--target "${RELEASE_BRANCH}")
+          else
+            target_args=()
+          fi
+
           # One combined checksum file is easier to fetch than six, and it is the format a
           # package manifest wants anyway.
           cat dist/*.sha256 > SHA256SUMS
@@ -381,10 +392,10 @@ jobs:
             echo "release ${TAG} exists; refreshing it"
             gh release edit "${TAG}" --title "${TAG}" --notes-file notes.md "${channel_args[@]}"
           else
-            # `--target` is not optional: without it the API creates the tag at the
-            # default branch's head, which is the tree *before* the bump, and the tag
+            # `--target` is not optional on a bump: without it the API creates the tag at
+            # the default branch's head, which is the tree *before* the bump, and the tag
             # then disagrees with the version inside it.
-            gh release create "${TAG}" --draft --target "${RELEASE_BRANCH}" \
+            gh release create "${TAG}" --draft "${target_args[@]}" \
               --title "${TAG}" --notes-file notes.md "${channel_args[@]}"
           fi
           gh release upload "${TAG}" dist/pacor-* SHA256SUMS --clobber
