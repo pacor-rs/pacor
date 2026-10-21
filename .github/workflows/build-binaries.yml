@@ -98,6 +98,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
 
+      # Read *and* write, unlike everything else here: this is the family nightly fills and
+      # the release reuses. With `restore` alone the key was never saved by anyone, so every
+      # one of these builds compiled from scratch — including the six nightly runs a week.
+      - name: Cache release build
+        uses: actions/cache@v5
+        with:
+          path: |
+            target/${{ matrix.platform.target }}/release/.fingerprint
+            target/${{ matrix.platform.target }}/release/deps
+            target/${{ matrix.platform.target }}/release/build
+          key: ${{ runner.os }}-rust-release-${{ matrix.platform.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-release-${{ matrix.platform.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+
       # The only target that needs a linker this runner does not ship.
       - name: Install the ARM64 linker
         if: matrix.platform.target == 'aarch64-unknown-linux-gnu'

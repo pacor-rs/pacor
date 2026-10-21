@@ -223,6 +223,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
 
+      # Written here rather than merely restored: nothing else produces this key, and a cold
+      # `cargo check` per target is about 40 s, so the entry pays for itself on the next pull
+      # request that touches no dependency.
+      - name: Cache target build
+        uses: actions/cache@v5
+        with:
+          path: |
+            target/${{ matrix.target }}/debug/.fingerprint
+            target/${{ matrix.target }}/debug/deps
+            target/${{ matrix.target }}/debug/build
+          key: ${{ runner.os }}-rust-cross-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-cross-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+
       # `ring`, the crypto backend of rustls, compiles a little C: this is the only cross
       # target here that does not already have a compiler for it on PATH.
       - name: Install the ARM64 C compiler
