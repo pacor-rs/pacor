@@ -8,8 +8,10 @@ concurrency:
 
 on:
   pull_request:
-    branches:
-      - main
+    # Every pull request, whatever branch it targets. Restricting this to `main` meant a
+    # stacked pull request — one based on another branch, which is how a multi-commit change
+    # gets reviewed — started no checks at all, so its first review was the one it got after
+    # its base merged and GitHub retargeted it at `main`.
     paths:
       # Everything that can change what CI has to say about a change belongs here. A
       # pull request that only edits the workflows or the documentation used to start
