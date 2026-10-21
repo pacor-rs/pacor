@@ -200,11 +200,20 @@ fn build_mirror_url_from_base(original_url: &str) -> Option<String> {
 
 // === HTTP client setup ===
 
+/// Windows and macOS verify with their own TLS stack (`native-tls`); Linux has no
+/// `native-tls` in its graph and verifies with rustls. Both end up trusting the operating
+/// system's roots — that is what `RootCerts::PlatformVerifier` asks for: the native-tls
+/// default on Windows and macOS, and `ureq`'s `platform-verifier` feature on Linux.
+#[cfg(target_os = "linux")]
+const TLS_PROVIDER: TlsProvider = TlsProvider::Rustls;
+#[cfg(not(target_os = "linux"))]
+const TLS_PROVIDER: TlsProvider = TlsProvider::NativeTls;
+
 fn create_base_agent_builder() -> ConfigBuilder<AgentScope> {
     Agent::config_builder()
         .tls_config(
             TlsConfig::builder()
-                .provider(TlsProvider::NativeTls)
+                .provider(TLS_PROVIDER)
                 .root_certs(RootCerts::PlatformVerifier)
                 .build(),
         )

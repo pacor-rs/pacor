@@ -13,7 +13,7 @@ because nothing happened" has to say so out loud.**
 
 | File | Trigger | What it does |
 | ---- | ---- | ---- |
-| `pr-check.yml` | PR → `main` (`crates/**`, `Cargo.toml`, `Cargo.lock`, `.cargo/**`, `.github/**`, `docs/**`, `*.md`) | `fmt` / `clippy` / `test` / release build on three platforms, a release-profile clippy pass, `cargo check` for three cross targets, actionlint, and the labelled auto-merge |
+| `pr-check.yml` | PR → `main` (`crates/**`, `Cargo.toml`, `Cargo.lock`, `.cargo/**`, `.github/**`, `docs/**`, `*.md`) | `fmt` / `clippy` / `test` / release build on three platforms, a release-profile clippy pass, `cargo check` for four cross targets, actionlint, and the labelled auto-merge |
 | `build-binaries.yml` | called by `publish.yml` and `nightly.yml` via `workflow_call` | release binaries for six platforms: build, optional UPX, smoke test, package, `.sha256`, upload artifact |
 | `publish.yml` | manual dispatch: a version bump and channel, or an existing `tag` to re-publish | bump the version on a temporary `release` branch → check it → call `build-binaries` → create a draft release, upload, publish → fast-forward `main` and tag → delete the branch |
 | `nightly.yml` | every day at 04:00 UTC, or manual dispatch | build `main`, replace the `nightly` pre-release wholesale |
@@ -157,6 +157,7 @@ cargo clippy --workspace --all-targets --release --locked -- -D warnings   # cod
 RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --locked --target x86_64-pc-windows-msvc
 RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --locked --target x86_64-apple-darwin
 RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --locked --target aarch64-apple-darwin
+RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --locked --target aarch64-unknown-linux-gnu
 ```
 
 A change to a workflow can be checked with actionlint locally:

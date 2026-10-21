@@ -12,7 +12,7 @@
 
 | 文件 | 触发 | 作用 |
 | ---- | ---- | ---- |
-| `pr-check.yml` | PR → `main`（`crates/**`、`Cargo.toml`、`Cargo.lock`、`.cargo/**`、`.github/**`、`docs/**`、`*.md`） | 三平台的 fmt / clippy / test / release 构建，release profile 的 clippy，三个交叉目标的 `cargo check`，actionlint，以及打了标签的自动合并 |
+| `pr-check.yml` | PR → `main`（`crates/**`、`Cargo.toml`、`Cargo.lock`、`.cargo/**`、`.github/**`、`docs/**`、`*.md`） | 三平台的 fmt / clippy / test / release 构建，release profile 的 clippy，四个交叉目标的 `cargo check`，actionlint，以及打了标签的自动合并 |
 | `build-binaries.yml` | 被 `publish.yml` 与 `nightly.yml` 以 `workflow_call` 调用 | 六个平台的 release 二进制：构建、可选 UPX、冒烟测试、打包、`.sha256`、上传 artifact |
 | `publish.yml` | 手动 dispatch：版本提升方式与通道，或填 `tag` 重发已有版本 | 在临时 `release` 分支上提升版本 → 检查该分支 → 调 `build-binaries` → 建草稿 release、上传、公开 → 快进 `main` 并打 tag → 删除分支 |
 | `nightly.yml` | 每天 04:00 UTC，或手动 dispatch | 构建 `main`，整体替换 `nightly` 预发布 |
@@ -132,6 +132,7 @@ cargo clippy --workspace --all-targets --release --locked -- -D warnings   # rel
 RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --locked --target x86_64-pc-windows-msvc
 RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --locked --target x86_64-apple-darwin
 RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --locked --target aarch64-apple-darwin
+RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --locked --target aarch64-unknown-linux-gnu
 ```
 
 workflow 本身的改动可以用 actionlint 本地校验：

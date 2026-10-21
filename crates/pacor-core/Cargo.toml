@@ -19,12 +19,28 @@ serde_yaml.workspace = true
 tracing.workspace = true
 dirs.workspace = true
 tempfile.workspace = true
-ureq.workspace = true
 walkdir.workspace = true
 zip.workspace = true
 flate2.workspace = true
 tar.workspace = true
 sha1.workspace = true
+
+# `ureq` is declared per target rather than in [workspace.dependencies], because the
+# TLS backend is the one dependency where the platforms genuinely differ.
+#
+# Linux uses rustls with the platform verifier: `native-tls` on Linux means OpenSSL,
+# and `openssl-sys` then needs the *target's* OpenSSL headers — which is what broke
+# `cargo build --target aarch64-unknown-linux-gnu` on an x86_64 runner. rustls keeps
+# the graph pure Rust apart from `ring`, whose bundled build only needs a compiler for
+# the target (the cross linker the build already installs).
+#
+# Windows and macOS keep `native-tls`: Schannel and Security.framework, no C toolchain,
+# and platform verification is what they do anyway.
+[target.'cfg(target_os = "linux")'.dependencies]
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+ureq = { version = "3", default-features = false, features = ["native-tls"] }
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -199,6 +199,9 @@ jobs:
           - x86_64-pc-windows-msvc
           - x86_64-apple-darwin
           - aarch64-apple-darwin
+          # The release builds this one, so check it too: it is the target whose
+          # dependencies made an older pipeline need an OpenSSL sysroot at release time.
+          - aarch64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v7
 
@@ -230,6 +233,12 @@ jobs:
           key: ${{ runner.os }}-rust-cross-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-rust-cross-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+
+      # `ring`, the crypto backend of rustls, compiles a little C: this is the only cross
+      # target here that does not already have a compiler for it on PATH.
+      - name: Install the ARM64 C compiler
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
 
       # `RUSTFLAGS` rather than `-- -D warnings`: `cargo check` takes no rustc arguments.
       - name: Cargo check for target

@@ -40,6 +40,7 @@ cargo clippy --workspace --all-targets --release --locked -- -D warnings
 RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --locked --target x86_64-pc-windows-msvc
 RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --locked --target x86_64-apple-darwin
 RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --locked --target aarch64-apple-darwin
+RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --locked --target aarch64-unknown-linux-gnu
 ```
 
 Some of these are not ceremony:
@@ -47,9 +48,11 @@ Some of these are not ceremony:
 - **The release pass is not a duplicate.** `#[cfg(debug_assertions)]` hides entire items from
   the debug build (the `trace` log level in `pacor-cli` is one), so a `dead_code` or `unused`
   warning introduced by that gate only ever appears in the release pass.
-- **Cross-checking needs no cross toolchain**, because the repository has no C dependencies
-  (compression uses the pure-Rust `zlib-rs` backend). A dependency that needs a C toolchain
-  or a system library invalidates this and is a change worth discussing on its own.
+- **Cross-checking needs almost no cross toolchain.** Compression is pure Rust
+  (`zlib-rs`) and the only C in the graph is `ring`, the crypto backend behind Linux's
+  rustls — so the `aarch64-unknown-linux-gnu` check installs `gcc-aarch64-linux-gnu`
+  and every other target needs nothing. A new dependency that needs a C toolchain or a
+  system library invalidates this and is a change worth discussing on its own.
 - There is no `rustfmt.toml`; the default configuration (100 columns) applies. Do not
   re-wrap code by hand for looks.
 - Do not habitually run a full `cargo build --release` locally: the release profile is
@@ -248,6 +251,11 @@ after that merges. A rule the repository's own automation ignores is not a rule.
 - **Direct connections to GitHub** are reset on some networks (raw, API and release assets
   alike). The proxy and mirror recipes live in `docs/ENVIRONMENT_VARIABLES.md`; check there
   before working around it in code.
+- **TLS differs by platform.** Windows and macOS use `native-tls` (Schannel,
+  Security.framework); Linux uses rustls, because `native-tls` there is OpenSSL and
+  `openssl-sys` makes every cross build need the target's headers. Both verify against
+  the operating system's trust store, so a corporate CA installed system-wide works
+  on all three — but a CA that only some tool trusts does not.
 - **The platform status table** may only claim what has actually been built and run. That
   table is a release promise, not a roadmap.
 

@@ -84,7 +84,8 @@ flate2 = { version = "1", default-features = false, features = [
 ] }
 tar = { version = "0", default-features = false }
 # Networking / archives
-ureq = { version = "3", default-features = false, features = ["native-tls"] }
+# `ureq` is declared per target in the crate that uses it rather than pinned here:
+# the TLS backend is the one dependency where the platforms genuinely differ.
 walkdir = { version = "2", default-features = false }
 zip = { version = "8", default-features = false, features = ["deflate"] }
 
