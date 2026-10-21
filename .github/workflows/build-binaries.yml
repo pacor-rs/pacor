@@ -98,17 +98,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
 
-      - name: Cache release build
-        uses: actions/cache/restore@v5
-        with:
-          path: |
-            target/${{ matrix.platform.target }}/release/.fingerprint
-            target/${{ matrix.platform.target }}/release/deps
-            target/${{ matrix.platform.target }}/release/build
-          key: ${{ runner.os }}-rust-release-${{ matrix.platform.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-rust-release-${{ matrix.platform.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-
-
       # The only target that needs a linker this runner does not ship.
       - name: Install the ARM64 linker
         if: matrix.platform.target == 'aarch64-unknown-linux-gnu'
