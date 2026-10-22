@@ -263,8 +263,9 @@ The following behaviour was verified by actually installing and uninstalling a r
 
 ## Cleanup
 
-- `pacor clean`: removes the output directory, the Flutter build artifacts and the debug
-  symbols in `tmp/`;
+- `pacor clean`: removes the output directory and the Flutter build artifacts (with
+  `--target`, only that target's build directory and artifacts); the debug symbols in `tmp/`
+  are removed by the build's own cleanup step unless `--skip-cleanup` is given;
 - `pacor cache clean [--dry-run]`: removes the shared cache under `%APPDATA%\pacor`
   (including NSIS, WiX and templates).
 

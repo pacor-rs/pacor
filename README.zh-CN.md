@@ -59,7 +59,7 @@ pacor build
 | `pacor init [--force]`                                      | 写入带注释的配置模板                   |
 | `pacor build [--target OS] [--format FMT]...`               | 构建安装包                             |
 | `pacor android`                                             | `pacor build --target android` 的别名  |
-| `pacor clean [--target OS]`                                 | 删除输出目录和 Flutter 构建产物        |
+| `pacor clean [--target OS]`                                 | 删除构建产物（带 `--target` 时只删该目标的） |
 | `pacor cache clean [--dry-run]`                             | 清除缓存中已下载的工具与模板           |
 | `pacor check [--target OS]`                                 | 校验项目、配置与构建工具               |
 | `pacor config [--full]`                                     | 打印生效的配置                         |

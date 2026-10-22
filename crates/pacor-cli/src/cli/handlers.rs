@@ -1,7 +1,7 @@
 //! Implementations of the individual CLI commands.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 
@@ -50,6 +50,11 @@ pub fn build(request: BuildRequest) -> Result<()> {
 }
 
 /// Remove the output directory and Flutter build artifacts.
+///
+/// With a target, only that target's build directory and its artifacts are
+/// removed: the output directory is shared by every platform, and deleting a
+/// working AppImage because the user rebuilt the Windows installer is not what
+/// `--target` promises.
 pub fn clean(target: Option<Platform>, config_path: Option<&std::path::Path>) -> Result<()> {
     let formatter = OutputFormatter::new(CommandOutputMode::Normal);
     formatter.section("Cleaning Build Artifacts");
@@ -57,22 +62,85 @@ pub fn clean(target: Option<Platform>, config_path: Option<&std::path::Path>) ->
     let config = PacorConfig::load_from(config_path)?;
     let project_root = config.project_root()?;
     let output_dir = config.output_dir()?;
+
+    let Some(target) = target else {
+        if output_dir.exists() {
+            formatter.info(&format!("Removing {}", output_dir.display()));
+            remove_output_directory(&output_dir, &project_root)?;
+        }
+
+        let flutter_build_dir = project_root.join("build");
+        if flutter_build_dir.exists() {
+            formatter.info(&format!("Removing {}", flutter_build_dir.display()));
+            clean_dir(&flutter_build_dir)?;
+        }
+
+        formatter.success("All build artifacts cleaned successfully");
+        return Ok(());
+    };
+
+    let builder = packager_for(target, &config)?;
+
+    for relative in builder.clean_build_directories() {
+        let directory = project_root.join(relative);
+        if directory.exists() {
+            formatter.info(&format!("Removing {}", directory.display()));
+            clean_dir(&directory)?;
+        }
+    }
+
     if output_dir.exists() {
-        formatter.info(&format!("Removing {}", output_dir.display()));
-        remove_output_directory(&output_dir, &project_root)?;
+        let removed = remove_target_artifacts(&output_dir, builder.artifact_suffixes())?;
+        if removed == 0 {
+            formatter.info(&format!(
+                "No `{target}` artifacts in {}",
+                output_dir.display()
+            ));
+        } else {
+            formatter.info(&format!(
+                "Removed {removed} `{target}` artifact(s) from {}",
+                output_dir.display()
+            ));
+        }
     }
 
-    let flutter_build_dir = project_root.join("build");
-    if flutter_build_dir.exists() {
-        formatter.info(&format!("Removing {}", flutter_build_dir.display()));
-        clean_dir(&flutter_build_dir)?;
-    }
-
-    if let Some(target) = target {
-        formatter.info(&format!("Cleanup completed for target `{}`", target));
-    }
-    formatter.success("All build artifacts cleaned successfully");
+    formatter.success(&format!(
+        "All `{target}` build artifacts cleaned successfully"
+    ));
     Ok(())
+}
+
+/// Remove the artifacts and checksums of one target from `directory`.
+///
+/// A name matches when it ends with one of `suffixes`, or with
+/// `<suffix>.sha1` for the checksum that accompanies the artifact. Only files
+/// are removed; subdirectories and the artifacts of other targets stay.
+fn remove_target_artifacts(directory: &Path, suffixes: &[&str]) -> Result<usize> {
+    let mut removed = 0;
+
+    for entry in fs::read_dir(directory)
+        .with_context(|| format!("failed to read {}", directory.display()))?
+    {
+        let path = entry?.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let belongs_to_target = suffixes
+            .iter()
+            .any(|suffix| name.ends_with(suffix) || name.ends_with(&format!("{suffix}.sha1")));
+        if !belongs_to_target {
+            continue;
+        }
+
+        fs::remove_file(&path).with_context(|| format!("failed to remove {}", path.display()))?;
+        removed += 1;
+    }
+
+    Ok(removed)
 }
 
 /// Remove pacor's cache of downloaded tools and templates.
@@ -271,4 +339,64 @@ fn cleanup_after_build(
         .context("`flutter clean` failed")?;
     builder.clean()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn only_the_requested_target_is_removed_from_the_output_directory() {
+        let temp = TempDir::new().unwrap();
+        for name in [
+            "app-1.0.0-x64.AppImage",
+            "app-1.0.0-x64.AppImage.sha1",
+            "app-1.0.0-x64.deb",
+            "app-1.0.0-x64-setup.exe",
+            "notes.txt",
+        ] {
+            fs::write(temp.path().join(name), name).unwrap();
+        }
+
+        let removed = remove_target_artifacts(temp.path(), &[".AppImage", ".deb"]).unwrap();
+
+        assert_eq!(removed, 3);
+        assert!(!temp.path().join("app-1.0.0-x64.AppImage").exists());
+        assert!(!temp.path().join("app-1.0.0-x64.AppImage.sha1").exists());
+        assert!(!temp.path().join("app-1.0.0-x64.deb").exists());
+        assert!(
+            temp.path().join("app-1.0.0-x64-setup.exe").is_file(),
+            "another target's artifact must survive"
+        );
+        assert!(
+            temp.path().join("notes.txt").is_file(),
+            "files that are not artifacts must survive"
+        );
+    }
+
+    #[test]
+    fn checksums_are_matched_only_for_the_configured_suffixes() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("other.deb.sha1"), "sha1").unwrap();
+        fs::write(temp.path().join("other.zip.sha1"), "sha1").unwrap();
+
+        let removed = remove_target_artifacts(temp.path(), &[".deb"]).unwrap();
+
+        assert_eq!(removed, 1);
+        assert!(!temp.path().join("other.deb.sha1").exists());
+        assert!(temp.path().join("other.zip.sha1").is_file());
+    }
+
+    #[test]
+    fn a_directory_named_like_an_artifact_is_left_alone() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir(temp.path().join("bundle.deb")).unwrap();
+
+        let removed = remove_target_artifacts(temp.path(), &[".deb"]).unwrap();
+
+        assert_eq!(removed, 0);
+        assert!(temp.path().join("bundle.deb").is_dir());
+    }
 }

@@ -210,6 +210,16 @@ impl<'a> BundleBuilder for MacOSAppBuilder<'a> {
         Ok(())
     }
 
+    fn clean_build_directories(&self) -> &'static [&'static str] {
+        &["build/macos"]
+    }
+
+    fn artifact_suffixes(&self) -> &'static [&'static str] {
+        // The updater archive is `{base}.app.tar.gz`: match the whole tail so
+        // that an unrelated `.gz` in `dist/` is not removed.
+        &[".dmg", ".app.tar.gz"]
+    }
+
     fn validate(&self) -> Result<()> {
         let required_tools = ["flutter", "xcodebuild", "codesign"];
         let pubspec_path = self.project_root.join("pubspec.yaml");
