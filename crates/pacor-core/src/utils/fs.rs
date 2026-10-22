@@ -4,7 +4,10 @@
 //! unix permissions) are gated with `#[cfg]` *inside* the functions, never at
 //! the module level, so a backend can always be type-checked.
 
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Component, Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 
@@ -99,6 +102,53 @@ pub fn create_symlink(src: &Path, dst: &Path) -> Result<()> {
     } else {
         symlink_file(src, dst).map_err(Into::into)
     }
+}
+
+/// Why a path cannot be used as a location inside an installed package, if it cannot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackagePathProblem {
+    /// The path contains `..`.
+    EscapesRoot,
+    /// The path names the package root itself rather than something in it.
+    IsRoot,
+}
+
+impl std::fmt::Display for PackagePathProblem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EscapesRoot => {
+                write!(f, "must not contain `..`: it would leave the package root")
+            }
+            Self::IsRoot => write!(f, "must name a file or directory inside the package root"),
+        }
+    }
+}
+
+/// Resolve a configured path to the location it occupies inside a package.
+///
+/// Absolute paths are package-absolute — `/usr/bin/tool` installs to `usr/bin/tool` —
+/// which is what the `files` mappings of the Debian backend document. `..` is
+/// rejected instead of resolved: the payload is assembled in a staging directory, so
+/// resolving it would write wherever the build happens to run, outside the package
+/// being assembled and, for a project that came from somewhere else, into the
+/// packager's own files.
+pub fn package_relative_path(target: &Path) -> Result<PathBuf, PackagePathProblem> {
+    let mut resolved = PathBuf::new();
+    for component in target.components() {
+        match component {
+            Component::Normal(part) => resolved.push(part),
+            Component::CurDir | Component::RootDir => {}
+            Component::ParentDir | Component::Prefix(_) => {
+                return Err(PackagePathProblem::EscapesRoot);
+            }
+        }
+    }
+
+    if resolved.as_os_str().is_empty() {
+        return Err(PackagePathProblem::IsRoot);
+    }
+
+    Ok(resolved)
 }
 
 /// Write a file and, on unix, mark it executable.
@@ -209,5 +259,39 @@ mod tests {
 
         assert_eq!(directory_size(temp.path()), 0);
         assert_eq!(directory_size(&temp.path().join("does-not-exist")), 0);
+    }
+
+    #[test]
+    fn package_relative_path_keeps_absolute_targets_inside_the_package() {
+        assert_eq!(
+            package_relative_path(Path::new("/usr/share/doc/demo/LICENSE")).unwrap(),
+            Path::new("usr/share/doc/demo/LICENSE")
+        );
+        assert_eq!(
+            package_relative_path(Path::new("./usr/bin/tool")).unwrap(),
+            Path::new("usr/bin/tool")
+        );
+    }
+
+    #[test]
+    fn package_relative_path_refuses_to_leave_the_package() {
+        for target in ["../x", "usr/../../x", "/usr/../x"] {
+            assert_eq!(
+                package_relative_path(Path::new(target)),
+                Err(PackagePathProblem::EscapesRoot),
+                "{target}"
+            );
+        }
+    }
+
+    #[test]
+    fn package_relative_path_refuses_the_package_root_itself() {
+        for target in ["", "/", "."] {
+            assert_eq!(
+                package_relative_path(Path::new(target)),
+                Err(PackagePathProblem::IsRoot),
+                "{target}"
+            );
+        }
     }
 }

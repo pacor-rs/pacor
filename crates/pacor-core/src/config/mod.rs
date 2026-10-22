@@ -26,6 +26,7 @@ pub use windows::{InstallerFormat, WindowsConfig};
 use crate::core::freedesktop::CategoryProblem;
 use crate::core::project::find_flutter_project_root;
 use crate::error::{ConfigurationError, Error, Result};
+use crate::utils::fs::package_relative_path;
 
 /// The default configuration file name looked up in the Flutter project root.
 pub const CONFIG_FILE_NAME: &str = "pacor.toml";
@@ -168,6 +169,36 @@ impl PacorConfig {
         }
 
         self.validate_desktop_entry()?;
+        self.validate_debian_files()?;
+
+        Ok(())
+    }
+
+    /// Validate `[platforms.linux.deb].files`.
+    ///
+    /// The targets are paths inside the package root, so a `..` component would
+    /// write to wherever the build happens to run — outside the package being
+    /// assembled and, for a project that came from somewhere else, into the
+    /// packager's own files. Rejecting it here names the offending entry before any
+    /// of the build has run.
+    fn validate_debian_files(&self) -> Result<()> {
+        let Some(deb) = self
+            .platforms
+            .linux
+            .as_ref()
+            .and_then(|linux| linux.deb.as_ref())
+        else {
+            return Ok(());
+        };
+
+        for target in deb.files().values() {
+            if let Err(problem) = package_relative_path(target) {
+                return Err(Error::Configuration(ConfigurationError::ValidationFailed {
+                    field: "platforms.linux.deb.files".to_string(),
+                    reason: format!("`{}` {problem}", target.display()),
+                }));
+            }
+        }
 
         Ok(())
     }
@@ -338,6 +369,58 @@ mod tests {
         config.validate().unwrap();
     }
 
+    /// `files` copies into the directory that becomes the package, so a target that
+    /// walks back out of it writes wherever the build happens to run instead.
+    #[test]
+    fn a_deb_files_target_may_not_leave_the_package_root() {
+        for target in ["../etc/passwd", "/usr/../../etc/passwd", "usr/./../../x"] {
+            let config: PacorConfig = toml::from_str(&format!(
+                r#"
+                [app]
+                default_locale = "en-US"
+                url = "https://example.com"
+                [app.i18n.en-US]
+                publisher = "p"
+                [platforms.linux.deb]
+                files = {{ "LICENSE" = "{target}" }}
+                "#
+            ))
+            .unwrap();
+
+            let error = config.validate().unwrap_err().to_string();
+            assert!(
+                error.contains("platforms.linux.deb.files"),
+                "{target}: {error}"
+            );
+            assert!(error.contains(target), "{target}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_deb_files_target_inside_the_package_passes_validation() {
+        for target in [
+            "/usr/share/doc/demo/LICENSE",
+            "usr/share/demo/data.json",
+            "./usr/bin/tool",
+        ] {
+            let config: PacorConfig = toml::from_str(&format!(
+                r#"
+                [app]
+                default_locale = "en-US"
+                url = "https://example.com"
+                [app.i18n.en-US]
+                publisher = "p"
+                [platforms.linux.deb]
+                files = {{ "LICENSE" = "{target}" }}
+                "#
+            ))
+            .unwrap();
+
+            config
+                .validate()
+                .unwrap_or_else(|error| panic!("{target} must be accepted: {error}"));
+        }
+    }
     #[test]
     fn all_platform_sections_parse_on_any_host() {
         let config: PacorConfig = toml::from_str(

@@ -23,7 +23,7 @@ use anyhow::Result;
 
 use pacor_core::config::AppConfig;
 use pacor_core::core::freedesktop::FreeDesktop;
-use pacor_core::utils::fs::{copy_dir, ensure_directory_exists};
+use pacor_core::utils::fs::{copy_dir, ensure_directory_exists, package_relative_path};
 
 use crate::icon::{Icon, install_icons_to_hicolor_dir};
 
@@ -158,7 +158,9 @@ fn install_icons(data_root: &Path, context: &DataContext<'_>) -> Result<()> {
 
 /// Copy the `files` mappings declared in `[platforms.linux.deb]`.
 ///
-/// Absolute targets are interpreted as paths inside the package root.
+/// Absolute targets are interpreted as paths inside the package root. The
+/// configuration is validated when it is loaded, but the mapping can also arrive
+/// from code, so the escape is refused here as well rather than trusted.
 fn install_extra_files(data_root: &Path, context: &DataContext<'_>) -> Result<()> {
     for (source, target) in context.extra_files {
         if !source.exists() {
@@ -168,7 +170,13 @@ fn install_extra_files(data_root: &Path, context: &DataContext<'_>) -> Result<()
             ));
         }
 
-        let target = data_root.join(target.strip_prefix("/").unwrap_or(target));
+        let relative = package_relative_path(target).map_err(|problem| {
+            anyhow::anyhow!(
+                "configured extra file target `{}` {problem}",
+                target.display()
+            )
+        })?;
+        let target = data_root.join(relative);
         if let Some(parent) = target.parent() {
             ensure_directory_exists(parent)?;
         }
@@ -343,6 +351,41 @@ mod tests {
         );
     }
 
+    /// The payload is assembled in a staging directory, so a target with `..` would
+    /// write next to that directory — on the packager's machine, not into the package.
+    #[test]
+    fn a_files_target_may_not_escape_the_package_root() {
+        let temp = TempDir::new().unwrap();
+        let build_dir = temp.path().join("build");
+        flutter_build(&build_dir, "demo");
+
+        let source = temp.path().join("LICENSE");
+        fs::write(&source, "MIT").unwrap();
+
+        let app_config = app_config();
+        let desktop = FreeDesktop::default();
+        let icons = BTreeMap::new();
+        let extra = HashMap::from([(source, PathBuf::from("../../escaped.txt"))]);
+        let context = DataContext {
+            app_config: &app_config,
+            executable_name: "demo",
+            package_name: "demo",
+            flutter_build_path: &build_dir,
+            desktop: &desktop,
+            icons: &icons,
+            extra_files: &extra,
+        };
+
+        let staging = temp.path().join("staging");
+        ensure_directory_exists(&staging).unwrap();
+        let error = assemble_data_root(&staging, &context).unwrap_err();
+
+        assert!(error.to_string().contains("package root"), "{error}");
+        assert!(
+            !temp.path().join("escaped.txt").exists(),
+            "the file must not be written outside the package"
+        );
+    }
     #[test]
     fn extra_files_with_absolute_targets_land_in_package_root() {
         let temp = TempDir::new().unwrap();
