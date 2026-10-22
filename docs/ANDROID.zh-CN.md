@@ -234,13 +234,15 @@ AAB 是 JAR，用的是 **JAR 签名**，`apksigner` 的签名方案对它不适
 
 ```
 jarsigner -keystore <keystore> -storepass[:env] <口令> -keypass[:env] <口令> \
-    -sigalg SHA256withRSA -digestalg SHA-256 <aab> <alias>
+    -digestalg SHA-256 <aab> <alias>
 ```
 
 口令来自环境变量时用 `-storepass:env PACOR_ANDROID_KEYSTORE_PASSWORD` /
 `-keypass:env PACOR_ANDROID_KEY_PASSWORD`（已用 JDK 21 的 `jarsigner` 实测可用），来自配置
-文件时按字面量传入。`-sigalg`/`-digestalg` 固定为 SHA-256，避免老 JDK 默认的 SHA-1 让 Play
-拒收。
+文件时按字面量传入。`-digestalg` 固定为 SHA-256，避免老 JDK 默认的 SHA-1 让 Play 拒收。
+**签名算法不再固定**：`jarsigner` 会按私钥类型自行选择（RSA 用 SHA256withRSA，EC 用
+SHA256withECDSA），写死 SHA256withRSA 会让所有 EC 密钥库报 "signature algorithm
+SHA256withRSA not compatible with key"。
 
 **签名前会先剥离 Gradle 已有的 JAR 签名。** `flutter build appbundle` 会用工程的 Gradle
 签名配置给 AAB 签名（没有配置时就是 **debug** keystore），而 `jarsigner` 是**追加**签名而不是

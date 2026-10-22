@@ -706,8 +706,6 @@ fn a_configured_keystore_signs_the_bundle_with_jarsigner() {
                 "PACOR_ANDROID_KEYSTORE_PASSWORD",
                 "-keypass",
                 "key-from-file",
-                "-sigalg",
-                "SHA256withRSA",
                 "-digestalg",
                 "SHA-256",
             ] {
@@ -716,6 +714,12 @@ fn a_configured_keystore_signs_the_bundle_with_jarsigner() {
                     "`{expected}` missing from `{call}`"
                 );
             }
+            // `-sigalg` must stay absent: `jarsigner` derives it from the key, and pinning
+            // SHA256withRSA rejects every EC keystore.
+            assert!(
+                !call.contains("-sigalg"),
+                "sigalg must not be pinned: {call}"
+            );
             // `jarsigner` takes the alias as the last positional argument. Strip a closing
             // quote first: the Windows stub records the line through `%*`, which keeps the
             // quotes cmd put around the path.
