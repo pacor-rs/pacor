@@ -68,7 +68,7 @@ pacor build
 （默认图标集、构建模板、`linuxdeploy`、NSIS）。被清除的内容会在下次需要时
 重新下载，`--dry-run` 可先列出将要删除的内容。
 
-全局参数：`--config <path>`（默认项目根目录下的 `pacor.toml`）、
+全局参数：`--config <path>`（默认项目根目录下的 `pacor.toml`；显式指定时必须存在）、
 `--command-output <none|normal|verbose>`（外部命令输出）、
 `-l/--log-level <error|warn|info|debug>`。
 

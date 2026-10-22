@@ -80,33 +80,53 @@ impl PacorConfig {
     }
 
     /// Load the configuration from an explicit path, or from the project root.
+    ///
+    /// An explicitly named file must exist: falling back to the defaults hid a
+    /// mistyped `--config` behind a build that used none of the user's settings.
+    /// Only the default location is optional, and its absence is logged.
     pub fn load_from(explicit_path: Option<&Path>) -> Result<Self> {
-        let path = match explicit_path {
-            Some(path) => path.to_path_buf(),
-            None => project_root()?.join(CONFIG_FILE_NAME),
-        };
-
-        let config = if path.exists() {
-            let content = std::fs::read_to_string(&path).map_err(|error| {
-                Error::Configuration(ConfigurationError::InvalidFormat {
-                    file: path.clone(),
-                    reason: format!("failed to read file: {error}"),
-                })
-            })?;
-
-            toml::from_str(&content).map_err(|error| {
-                Error::Configuration(ConfigurationError::InvalidFormat {
-                    file: path.clone(),
-                    reason: format!("invalid TOML: {error}"),
-                })
-            })?
-        } else {
-            Self::default()
+        let config = match explicit_path {
+            Some(path) => Self::from_file(path)?,
+            None => {
+                let path = project_root()?.join(CONFIG_FILE_NAME);
+                if path.exists() {
+                    Self::from_file(&path)?
+                } else {
+                    debug!(
+                        path = %path.display(),
+                        "No configuration file found; using the built-in defaults"
+                    );
+                    Self::default()
+                }
+            }
         };
 
         let config = config.apply_environment()?;
         config.validate()?;
         Ok(config)
+    }
+
+    /// Read and parse one configuration file.
+    fn from_file(path: &Path) -> Result<Self> {
+        let content = std::fs::read_to_string(path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                Error::Configuration(ConfigurationError::FileNotFound {
+                    path: path.to_path_buf(),
+                })
+            } else {
+                Error::Configuration(ConfigurationError::InvalidFormat {
+                    file: path.to_path_buf(),
+                    reason: format!("failed to read file: {error}"),
+                })
+            }
+        })?;
+
+        toml::from_str(&content).map_err(|error| {
+            Error::Configuration(ConfigurationError::InvalidFormat {
+                file: path.to_path_buf(),
+                reason: format!("invalid TOML: {error}"),
+            })
+        })
     }
 
     /// Apply the small, explicit set of environment overrides.
@@ -408,5 +428,56 @@ mod tests {
         .expect("minimal config must parse");
         config.build.output_dir = output_dir.to_string();
         config
+    }
+
+    #[test]
+    fn an_explicit_configuration_path_that_does_not_exist_is_an_error() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let missing = temp.path().join("absent").join(CONFIG_FILE_NAME);
+
+        let error = PacorConfig::load_from(Some(&missing))
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("Configuration file not found"), "{error}");
+        assert!(error.contains(&missing.display().to_string()), "{error}");
+    }
+
+    #[test]
+    fn an_explicit_configuration_path_is_read_without_a_flutter_project() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join(CONFIG_FILE_NAME);
+        std::fs::write(
+            &path,
+            r#"
+            [app]
+            default_locale = "en-US"
+            url = "https://example.com"
+            [app.i18n.en-US]
+            publisher = "p"
+            [build]
+            output_dir = "artifacts"
+            "#,
+        )
+        .unwrap();
+
+        let config = PacorConfig::load_from(Some(&path)).unwrap();
+
+        assert_eq!(config.build.output_dir, "artifacts");
+    }
+
+    #[test]
+    fn a_directory_named_like_a_configuration_file_is_an_error() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        let error = PacorConfig::load_from(Some(temp.path()))
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("Invalid configuration format"), "{error}");
+        assert!(
+            error.contains(&temp.path().display().to_string()),
+            "{error}"
+        );
     }
 }
