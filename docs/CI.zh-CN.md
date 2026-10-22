@@ -12,13 +12,13 @@
 
 | 文件 | 触发 | 作用 |
 | ---- | ---- | ---- |
-| `pr-check.yml` | PR → `main`（`crates/**`、`Cargo.toml`、`Cargo.lock`、`.cargo/**`、`.github/**`、`docs/**`、`*.md`） | 三平台的 fmt / clippy / test / release 构建，release profile 的 clippy，四个交叉目标的 `cargo check`，actionlint，以及打了标签的自动合并 |
+| `pr-check.yml` | PR → `main`（`crates/**`、`Cargo.toml`、`Cargo.lock`、`.cargo/**`、`.github/**`、`docs/**`、`*.md`） | 三平台的 fmt / clippy / test / release 构建，release profile 的 clippy，四个交叉目标的 `cargo check`，actionlint，打了标签的自动合并，以及这次合并随后调用的分支清理 |
 | `build-binaries.yml` | 被 `publish.yml` 与 `nightly.yml` 以 `workflow_call` 调用 | 六个平台的 release 二进制：构建、可选 UPX、冒烟测试、打包、`.sha256`、上传 artifact |
 | `publish.yml` | 手动 dispatch：版本提升方式与通道，或填 `tag` 重发已有版本 | 在临时 `release` 分支上提升版本 → 检查该分支 → 调 `build-binaries` → 在 `release` 分支 head 上建草稿 release、上传、公开 → 快进 `main` → 删除分支 |
 | `nightly.yml` | 每天 04:00 UTC，或手动 dispatch | 构建 `main`，整体替换 `nightly` 预发布 |
 | `warm-cache.yml` | `main` 上的 Cargo 文件变更、每周一 05:00 UTC、手动 dispatch | 提前把 cargo registry 与 target 缓存写好 |
 | `cleanup-old-caches.yml` | 每周一 00:00 UTC，或手动 dispatch（可 `dry_run`） | 每个缓存族只保留最新一条 |
-| `delete-merged-branch.yml` | 已合并的 PR 被关闭、每 15 分钟、或手动 dispatch | 删除合并后遗留的头分支；长期分支、来自 fork 的分支、以及仍被其它未合并 PR 使用的分支除外。定时清扫是为了覆盖用 `GITHUB_TOKEN` 完成的合并——那种合并不产生事件 |
+| `delete-merged-branch.yml` | 已合并的 PR 被关闭、自动合并作业调用它、或手动 dispatch | 删除合并后遗留的头分支；长期分支、来自 fork 的分支、以及仍被其它未合并 PR 使用的分支除外 |
 
 ## 发版
 
@@ -73,11 +73,11 @@ PR 被关闭**且已合并**时，`delete-merged-branch.yml` 会删除它的头�
 - 还有其它未合并的 PR 以它为头分支——堆叠 PR 正是这种形状，删掉 ref 会让子 PR 未经决定
   就被关闭。
 
-触发方式有两种。人工点"Merge"时 `pull_request.closed` 立刻触发，几秒内就删完；**用仓库
-`GITHUB_TOKEN` 完成的合并不会触发它**——GitHub 会屏蔽该 token 引起的事件，而 `automerge`
-正是以 `app/github-actions` 的身份合并的。所以这个工作流另外每 15 分钟跑一次同样的清扫，
-`workflow_dispatch` 则可以立刻执行一次。清扫取最近 200 个已合并的 PR，与仓库 ref 列表做
-一次比对，规则与事件路径完全相同；这一轮没删掉的分支会在下一轮重试。
+入口有两个，实现只有一份。人工点"Merge"时 `pull_request.closed` 触发，几秒内就删完；
+**用仓库 `GITHUB_TOKEN` 完成的合并根本不产生事件**——GitHub 不会为该 token 引起的事件启动
+工作流。所以 #17、#18 合并时没有任何清理运行，也正是 `pr-check` 的 `auto-merge` 作业在合并
+完成后直接调用这个工作流的原因。手动 dispatch 需要填 PR 编号，用于清理历史上遗留、或某次
+运行失败留下的分支。
 
 ref 本来就不存在算成功：如果仓库开启了"自动删除头分支"设置，这个工作流只是第二道保险而
 已。每次运行都会把结果写进 job summary，被保留下来的分支旁边就写着原因。

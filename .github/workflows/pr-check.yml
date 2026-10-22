@@ -341,3 +341,21 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MERGE_LABELS: "automerge"
           MERGE_REMOVE_LABELS: "automerge"
+
+  # The merge above is performed with `GITHUB_TOKEN`, and GitHub does not start a workflow
+  # for the events that token causes: the `pull_request.closed` listener in
+  # `delete-merged-branch.yml` never saw the merges of #17 and #18, so their branches stayed
+  # behind. Calling the cleanup here, where the merge happens, is the fix; a schedule that
+  # swept for leftovers would only have hidden the missing event.
+  delete-merged-branch:
+    name: "Delete merged branch"
+    needs: [auto-merge]
+    # A pull request without the label is not merged by the action, and a fork never reaches
+    # the job above; the cleanup is a no-op in both cases and says so in its own summary.
+    if: needs.auto-merge.result == 'success'
+    permissions:
+      contents: write
+      pull-requests: read
+    uses: ./.github/workflows/delete-merged-branch.yml
+    with:
+      pull_request_number: ${{ github.event.pull_request.number }}
