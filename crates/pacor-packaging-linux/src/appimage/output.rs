@@ -26,66 +26,86 @@ fn normalize_for_matching(name: &str) -> String {
 /// Move the produced AppImage to `expected_path` and make it executable.
 ///
 /// `name_prefixes` lists the names linuxdeploy may have used (display name and
-/// executable name). Candidates other than `expected_path` are preferred, so a
-/// stale artifact from an earlier build can never shadow a fresh one.
+/// executable name). The freshest file wins: linuxdeploy honours `OUTPUT`, so
+/// `expected_path` is normally this run's artifact, and an older `*.AppImage`
+/// left in the output directory must never replace it. When linuxdeploy ignored
+/// `OUTPUT` and wrote a differently named file, that file is newer than
+/// `expected_path` and is moved into place instead.
 pub(super) fn finalize_appimage(
     output_dir: &Path,
     expected_path: &Path,
     name_prefixes: &[&str],
 ) -> Result<PathBuf> {
-    match find_candidate(output_dir, expected_path, name_prefixes)? {
-        Some(generated) => {
-            // `fs::rename` will not overwrite on every platform.
-            if expected_path.exists() {
-                fs::remove_file(expected_path)
-                    .with_context(|| format!("failed to replace {}", expected_path.display()))?;
-            }
+    let expected_modified = modified_time(expected_path);
+    let candidate = find_candidate(output_dir, expected_path, name_prefixes)?;
 
-            fs::rename(&generated, expected_path).with_context(|| {
-                format!(
-                    "failed to rename {} to {}",
-                    generated.display(),
-                    expected_path.display()
-                )
-            })?;
+    let generated = match (&candidate, expected_modified) {
+        (Some((candidate_modified, candidate)), Some(expected_modified))
+            if candidate_modified > &expected_modified =>
+        {
+            Some(candidate)
+        }
+        (Some((_, candidate)), None) => Some(candidate),
+        _ => None,
+    };
 
-            debug!(
-                from = %generated.display(),
-                to = %expected_path.display(),
-                "AppImage renamed to the expected artifact name"
-            );
+    if let Some(generated) = generated {
+        // `fs::rename` will not overwrite on every platform.
+        if expected_path.exists() {
+            fs::remove_file(expected_path)
+                .with_context(|| format!("failed to replace {}", expected_path.display()))?;
         }
-        None if expected_path.exists() => {
-            trace!(path = %expected_path.display(), "linuxdeploy already used the expected name");
-        }
-        None => {
-            return Err(anyhow::anyhow!(
-                "linuxdeploy did not produce an AppImage in {} (looked for names starting with: \
-                 {}, or {}); set `OUTPUT` to pin the name",
-                output_dir.display(),
-                name_prefixes.join(", "),
-                expected_path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default()
-            ));
-        }
+
+        fs::rename(generated, expected_path).with_context(|| {
+            format!(
+                "failed to rename {} to {}",
+                generated.display(),
+                expected_path.display()
+            )
+        })?;
+
+        debug!(
+            from = %generated.display(),
+            to = %expected_path.display(),
+            "AppImage renamed to the expected artifact name"
+        );
+    } else if expected_modified.is_none() {
+        return Err(anyhow::anyhow!(
+            "linuxdeploy did not produce an AppImage in {} (looked for names starting with: \
+             {}, or {})",
+            output_dir.display(),
+            name_prefixes.join(", "),
+            expected_path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        ));
+    } else {
+        trace!(path = %expected_path.display(), "linuxdeploy used the expected name");
     }
 
     set_executable(expected_path)?;
     Ok(expected_path.to_path_buf())
 }
 
-/// Pick the AppImage linuxdeploy just wrote, if any.
+/// Modification time of `path`, or `None` when it does not exist.
+fn modified_time(path: &Path) -> Option<std::time::SystemTime> {
+    path.metadata()
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+}
+
+/// Pick the freshest AppImage other than `expected_path`, if any.
 ///
 /// Files matching a known prefix are considered, excluding `expected_path`
 /// itself; the most recently modified one wins, with the file name as a
-/// deterministic tie-breaker.
+/// deterministic tie-breaker. The modification time is returned with it, so
+/// the caller can compare it against `expected_path`.
 fn find_candidate(
     output_dir: &Path,
     expected_path: &Path,
     name_prefixes: &[&str],
-) -> Result<Option<PathBuf>> {
+) -> Result<Option<(std::time::SystemTime, PathBuf)>> {
     let entries = match fs::read_dir(output_dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -129,7 +149,7 @@ fn find_candidate(
             .then_with(|| left.1.file_name().cmp(&right.1.file_name()))
     });
 
-    Ok(candidates.into_iter().next().map(|(_, path)| path))
+    Ok(candidates.into_iter().next())
 }
 
 /// Mark `path` executable (no-op where unix permission bits do not exist).
@@ -238,6 +258,29 @@ mod tests {
             fs::read_to_string(&expected).unwrap(),
             "fresh",
             "a fresh build must not be shadowed by a stale artifact"
+        );
+    }
+
+    #[test]
+    fn a_fresh_expected_artifact_is_not_replaced_by_a_stale_candidate() {
+        let temp = TempDir::new().unwrap();
+        let expected = temp.path().join("Demo-1.0.0-x64.AppImage");
+        // linuxdeploy honoured `OUTPUT` and wrote `expected`; the 0.9.0 file is
+        // left over from the previous release. Renaming the stale file over the
+        // new one published the old binary under the new version and checksum.
+        write_at(&expected, "fresh", Duration::ZERO);
+        write_at(
+            &temp.path().join("Demo-0.9.0-x86_64.AppImage"),
+            "stale",
+            Duration::from_secs(600),
+        );
+
+        let result = finalize_appimage(temp.path(), &expected, &PREFIXES).unwrap();
+
+        assert_eq!(fs::read_to_string(&result).unwrap(), "fresh");
+        assert!(
+            temp.path().join("Demo-0.9.0-x86_64.AppImage").is_file(),
+            "an artifact of an earlier release must be left alone, not moved or deleted"
         );
     }
 
