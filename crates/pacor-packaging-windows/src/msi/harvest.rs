@@ -427,7 +427,10 @@ mod tests {
             "an unclosed element breaks the file: {xml}"
         );
         for empty in ["f_data_empty", "f_data_nested", "f_data_nested_also-empty"] {
-            assert!(!xml.contains(empty), "{empty} has nothing to install: {xml}");
+            assert!(
+                !xml.contains(empty),
+                "{empty} has nothing to install: {xml}"
+            );
         }
         assert!(xml.contains("f_data_flutter_assets"), "{xml}");
     }
