@@ -210,6 +210,10 @@ gh pr create --base main --fill
   along.
 - **The pull request is the unit of review.** Its description says what changes and why, in
   the same terms as the commit body, so that the merged history stays readable on its own.
+- **Title and description are English only**, for the same reason the commit messages are:
+  the change record is read by people, tools and agents that did not take part in the
+  conversation that produced it. Discuss in any language in the comments — that is
+  conversation, not record.
 - **Keep the branch current by rebasing on `main`**, not by merging `main` into it, so the
   history stays linear and the diff stays reviewable.
 - **No direct pushes, no force-pushes to `main`, no `--no-verify`.** An urgent one-line fix
