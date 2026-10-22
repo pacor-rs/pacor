@@ -154,7 +154,6 @@ impl<'a> NSISGenerator<'a> {
         );
 
         let mut language_includes = Vec::with_capacity(locale_count);
-        language_includes.push(self.language_include(default_lang_code));
 
         let mut version_info_lines = vec![format!(
             "VIProductVersion \"{}\"",
@@ -162,11 +161,26 @@ impl<'a> NSISGenerator<'a> {
         )];
         let mut localized_strings = Vec::with_capacity(locale_count);
 
-        // Generate all content in a single iteration
+        // Several locales can share one NSIS language — `en-US` and `en-GB` are both
+        // `English` — and emitting it twice makes `!insertmacro MUI_LANGUAGE` and the
+        // language `!include` appear twice, which `makensis` rejects outright. The
+        // default locale is rendered first so the language the installer opens in keeps
+        // its own metadata; the others contribute only codes nothing has claimed yet.
         let mut locales: Vec<_> = self.app_config.i18n().iter().collect();
-        locales.sort_by_key(|(locale, _)| (*locale).clone());
+        locales.sort_by_key(|(locale, _)| ((*locale) != default_locale, (*locale).clone()));
+
+        let mut rendered_codes: Vec<&str> = Vec::with_capacity(locale_count);
         for (locale, metadata) in locales {
             let lang_code = nsis_lang_code(locale);
+            if rendered_codes.contains(&lang_code) {
+                debug!(
+                    ?locale,
+                    lang_code, "skipping a locale that shares an NSIS language"
+                );
+                continue;
+            }
+            rendered_codes.push(lang_code);
+
             let nsis_lang_const = nsis_lang_constant(lang_code);
 
             debug!(
@@ -179,10 +193,9 @@ impl<'a> NSISGenerator<'a> {
             // 1. Language macro insertions
             language_macros.push(format!("!insertmacro MUI_LANGUAGE \"{}\"", lang_code));
 
-            // 2. Language file includes (skip default locale as it's already included)
-            if locale != self.app_config.default_locale() {
-                language_includes.push(self.language_include(lang_code));
-            }
+            // 2. Language file include: one per code, first occurrence wins, which the
+            //    duplicate check above already guarantees.
+            language_includes.push(self.language_include(lang_code));
 
             // 3. Version information block
             version_info_lines.push(format!("\n; {} Version Information", lang_code));
@@ -452,6 +465,35 @@ mod tests {
         );
     }
 
+    /// `en-US` and `en-GB` are both the NSIS `English` language, so a project that
+    /// configures both used to emit `!insertmacro MUI_LANGUAGE "English"` and its
+    /// `!include` twice — which `makensis` rejects, failing the whole installer build.
+    #[test]
+    fn locales_sharing_an_nsis_language_are_emitted_once() {
+        let config = app_config(&[Locale::EnUs, Locale::EnGb]);
+
+        let script = generator(&config, Path::new("/cache/nsis/v1"))
+            .render_nsis_script("{{LANGUAGE_MACROS}}\n{{LANGUAGE_INCLUDE}}\n{{VERSION_INFO}}")
+            .unwrap();
+
+        assert_eq!(
+            script
+                .matches("!insertmacro MUI_LANGUAGE \"English\"")
+                .count(),
+            1,
+            "the language macro must appear once: {script}"
+        );
+        assert_eq!(
+            script.matches("!include").count(),
+            1,
+            "the language file must be included once: {script}"
+        );
+        // The default locale wins, so `en-US` is the metadata that survives.
+        assert!(
+            script.contains("My App"),
+            "the default locale renders the version info: {script}"
+        );
+    }
     #[test]
     fn nsis_files_are_fetched_from_the_pinned_tag() {
         let url = pacor_core::tools::template_url("windows/nsis/template.nsi");
