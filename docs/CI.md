@@ -13,13 +13,13 @@ because nothing happened" has to say so out loud.**
 
 | File | Trigger | What it does |
 | ---- | ---- | ---- |
-| `pr-check.yml` | PR → `main` (`crates/**`, `Cargo.toml`, `Cargo.lock`, `.cargo/**`, `.github/**`, `docs/**`, `*.md`) | `fmt` / `clippy` / `test` / release build on three platforms, a release-profile clippy pass, `cargo check` for four cross targets, actionlint, and the labelled auto-merge |
+| `pr-check.yml` | PR → `main` (`crates/**`, `Cargo.toml`, `Cargo.lock`, `.cargo/**`, `.github/**`, `docs/**`, `*.md`) | `fmt` / `clippy` / `test` / release build on three platforms, a release-profile clippy pass, `cargo check` for four cross targets, actionlint, the labelled auto-merge, and the branch cleanup that merge calls |
 | `build-binaries.yml` | called by `publish.yml` and `nightly.yml` via `workflow_call` | release binaries for six platforms: build, optional UPX, smoke test, package, `.sha256`, upload artifact |
 | `publish.yml` | manual dispatch: a version bump and channel, or an existing `tag` to re-publish | bump the version on a temporary `release` branch → check it → call `build-binaries` → create a draft release at the release branch head, upload, publish → fast-forward `main` → delete the branch |
 | `nightly.yml` | every day at 04:00 UTC, or manual dispatch | build `main`, replace the `nightly` pre-release wholesale |
 | `warm-cache.yml` | Cargo file changes on `main`, Monday 05:00 UTC, manual dispatch | write the cargo registry and target caches ahead of time |
 | `cleanup-old-caches.yml` | Monday 00:00 UTC, or manual dispatch (`dry_run`) | keep only the newest entry of each cache family |
-| `delete-merged-branch.yml` | a merged pull request closes, every 15 minutes, or manual dispatch | delete the head branch of a merged pull request unless it is long-lived, from a fork, or still used by an open pull request; the schedule covers merges made with `GITHUB_TOKEN`, which emit no event |
+| `delete-merged-branch.yml` | a merged pull request closes, the auto-merge job calls it, or manual dispatch | delete the head branch of the merged pull request unless it is long-lived, from a fork, or still used by an open pull request |
 
 ## Releasing
 
@@ -89,13 +89,12 @@ branch when:
 - another open pull request still uses it as its head — a stacked pair looks exactly like
   that, and deleting the ref would close the child pull request without a decision.
 
-Two triggers feed it. `pull_request.closed` fires when a person presses "Merge", and the
-deletion runs seconds later. It does **not** fire for a merge performed with the
-repository's `GITHUB_TOKEN`: GitHub suppresses the events that token causes, and
-`automerge` merges as `app/github-actions`. That is what the 15-minute schedule is for, and
-`workflow_dispatch` runs the same sweep immediately. The sweep reads the 200 most recent
-merged pull requests, matches them against one listing of the repository's refs, and
-applies the guards above; a branch that survived is retried on the next run.
+Two ways in, one implementation. `pull_request.closed` covers a merge made by a person,
+and the deletion runs seconds later. A merge performed with the repository's
+`GITHUB_TOKEN` produces no event at all: GitHub does not start workflows for the events that
+token causes, which is why #17 and #18 were merged with no cleanup run, and why
+`pr-check`'s `auto-merge` job calls this workflow directly once it has merged. A manual
+dispatch takes a pull request number for the one-off branch left by an older merge.
 
 A ref that is already gone counts as success: with the repository's own "Automatically
 delete head branches" setting enabled, this workflow is a second opinion rather than the
