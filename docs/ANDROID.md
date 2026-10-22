@@ -138,17 +138,24 @@ ignored on Android.
 ### Locating the APK artifact
 
 Flutter's Gradle plugin copies the split APKs into `build/app/outputs/flutter-apk/` and
-names them `app<-abi>?<-flavor-name>?-<build-mode>.apk`. pacor tries, in order:
+names them `app<-abi>?<-flavor-name>?-<build-mode>.apk`. The name carries the flavor the
+build ran with, so pacor looks for the file that build could have written:
 
-1. `app-<abi>-release.apk`;
-2. `app-<abi>-<flavor>-release.apk` when `flavor` is configured;
-3. the only file in the directory matching `app-<abi>-*-release.apk` (for example an
-   artifact a `flavor` produced under a longer name).
+1. `app-<abi>-<flavor>-release.apk` when `flavor` is configured, `app-<abi>-release.apk`
+   otherwise;
+2. the only file in the directory matching `app-<abi>-*-release.apk`. With a `flavor`
+   configured, that candidate must carry the same flavor — compared case-insensitively,
+   because AGP lower-cases it in some versions. Without one, a single candidate is accepted
+   as it is: that is the `--use-existing-flutter-build` case, where whatever built the APK
+   chose the flavor.
 
-More than one match fails the build and lists the candidates instead of picking one; no
-match lists what the directory actually contains. That way a project that has a `flavor`
-but forgot to put it into `pacor.toml` gets a readable error rather than a bare
-`os error 2` (the localized "cannot find the file specified").
+A file carrying a *different* flavor, or the plain name next to a flavored build, cannot be
+what this build produced: `flutter build apk --flavor prod` writes only the flavored name,
+so such a file is left over from an earlier build, and packaging it would sign and ship the
+wrong APK as this release. More than one match fails the build and lists the candidates
+instead of picking one; no match lists what the directory actually contains — a project that
+has a `flavor` but forgot to put it into `pacor.toml` gets that readable error rather than
+a bare `os error 2` (the localized "cannot find the file specified").
 
 ### Locating the AAB artifact
 
@@ -167,7 +174,9 @@ they treat the directory's case, so pacor tries `release/`, `<flavor>Release/` a
 When the bundle sits in a flavor directory but the configuration does not mention
 `flavor`, pacor **does not** guess: it fails, lists the `.aab` files it found and points
 at `platforms.android.flavor` — such a file is usually another flavor's output or a
-leftover from an earlier build, and packaging it silently would ship the wrong thing.
+leftover from an earlier build, and packaging it silently would ship the wrong thing. The
+plain name is matched exactly too: below `release/`, only `app-release.aab` is accepted, so
+a renamed leftover such as `app-release-unsigned.aab` is reported rather than packaged.
 Several candidates behave the same way and list their names.
 
 ## ABI
@@ -354,12 +363,12 @@ write `["apk", "aab"]`.
 
 ### `Flutter did not produce an APK for <abi>`
 
-Flutter produced no APK for that ABI, or the name it produced does not match what was
-expected (most often because the project has a `flavor` that is missing from
-`pacor.toml`). The error lists the directory contents and the candidates; check
-`platforms.android.flavor` and retry. `several APKs match <abi>` means the directory holds
-several candidates (for example several flavors built at once), in which case `flavor` has
-to be set explicitly.
+Flutter produced no APK for that ABI, or the one it produced does not carry the configured
+`flavor` — most often because the project's Gradle flavor and `platforms.android.flavor`
+disagree, or because the directory still holds an earlier build's file. The error names the
+expected file and lists the directory contents; check `platforms.android.flavor` and retry.
+`several APKs match <abi>` means the directory holds several candidates (for example several
+flavors built at once), in which case `flavor` has to be set explicitly.
 
 ### `Flutter did not produce an Android App Bundle`
 

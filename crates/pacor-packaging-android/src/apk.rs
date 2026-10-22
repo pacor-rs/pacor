@@ -34,32 +34,39 @@ pub(crate) fn artifact_file_name(project_name: &str, version: &str, abi: &Target
 
 /// Finds the APK Flutter produced for `abi`.
 ///
-/// The expected name is tried first, then the flavored one, then any remaining
-/// `app-<abi>-*-release.apk` candidate: a configured flavor is not repeated in
-/// every project, and a mismatch between the configured flavor and the built one
-/// is exactly the case that deserves a readable error rather than an
-/// `os error 2` from the copy that follows.
+/// The file name carries the flavor the build ran with, so a configured flavor decides which
+/// file is the product. An `app-<abi>-release.apk` next to a flavored build is left over from
+/// an earlier unflavored one, and a file carrying a *different* flavor is left over from an
+/// earlier flavored one; either would be packaged, signed and shipped as this build's release
+/// artifact. The flavor is compared case-insensitively because AGP lower-cases it in some
+/// versions, and without a configured flavor a single remaining candidate is still the best
+/// guess — the `--use-existing-flutter-build` case.
 pub(crate) fn find_apk(directory: &Path, abi: &TargetAbi, flavor: Option<&str>) -> Result<PathBuf> {
-    let expected = plain_file_name(abi);
+    let expected = match flavor {
+        Some(flavor) => flavored_file_name(abi, flavor),
+        None => plain_file_name(abi),
+    };
     let exact = directory.join(&expected);
     if exact.is_file() {
         return Ok(exact);
     }
 
-    if let Some(flavor) = flavor {
-        let flavored = directory.join(flavored_file_name(abi, flavor));
-        if flavored.is_file() {
-            return Ok(flavored);
-        }
-    }
+    let candidates: Vec<PathBuf> = match flavor {
+        None => matching_files(directory, abi),
+        Some(flavor) => matching_files(directory, abi)
+            .into_iter()
+            .filter(|path| {
+                flavor_in_file_name(path, abi).is_some_and(|name| name.eq_ignore_ascii_case(flavor))
+            })
+            .collect(),
+    };
 
-    let candidates = matching_files(directory, abi);
     match candidates.as_slice() {
         [] => Err(missing_apk_error(directory, abi, flavor, &expected)),
         [only] => {
             debug!(
                 path = %only.display(),
-                "Found the APK for {abi} under a flavored name"
+                "Found the APK for {abi} under a name pacor did not expect"
             );
             Ok(only.clone())
         }
@@ -72,6 +79,13 @@ pub(crate) fn find_apk(directory: &Path, abi: &TargetAbi, flavor: Option<&str>) 
         })
         .into()),
     }
+}
+
+/// The flavor part of an `app-<abi>-<flavor>-release.apk` file name.
+fn flavor_in_file_name(path: &Path, abi: &TargetAbi) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    let rest = name.strip_prefix(&format!("app-{abi}-"))?;
+    rest.strip_suffix("-release.apk").map(ToString::to_string)
 }
 
 /// `app-<abi>-*-release.apk` files in `directory`, in a stable order.
@@ -105,20 +119,23 @@ fn missing_apk_error(
     flavor: Option<&str>,
     expected: &str,
 ) -> anyhow::Error {
-    let mut hint = String::new();
-    if let Some(flavor) = flavor {
-        hint = format!(
-            " (or {} for flavor `{flavor}`)",
-            flavored_file_name(abi, flavor)
-        );
-    }
+    let reason = match flavor {
+        Some(flavor) => format!(
+            "Flutter did not produce an APK for {abi} with flavor `{flavor}`; expected \
+             `{expected}`. {} A file above carrying another flavor is left over from an earlier \
+             build, or `platforms.android.flavor` does not match the Gradle flavor",
+            describe_directory(directory)
+        ),
+        None => format!(
+            "Flutter did not produce an APK for {abi}; expected `{expected}`. {} If the project \
+             defines a Gradle flavor, set `platforms.android.flavor`",
+            describe_directory(directory)
+        ),
+    };
 
     Error::Build(BuildError::ArtifactGeneration {
         artifact: directory.join(expected).display().to_string(),
-        reason: format!(
-            "Flutter did not produce an APK for {abi}; expected `{expected}`{hint}. {}",
-            describe_directory(directory)
-        ),
+        reason,
     })
     .into()
 }
@@ -191,14 +208,71 @@ mod tests {
     }
 
     #[test]
-    fn the_plain_name_wins() {
+    fn the_flavored_name_wins_when_a_flavor_is_configured() {
         let directory = apk_dir();
         touch(directory.path(), "app-arm64-v8a-release.apk");
         touch(directory.path(), "app-arm64-v8a-prod-release.apk");
 
         assert_eq!(
             find_apk(directory.path(), &TargetAbi::Arm64, Some("prod")).unwrap(),
-            directory.path().join("app-arm64-v8a-release.apk")
+            directory.path().join("app-arm64-v8a-prod-release.apk")
+        );
+    }
+
+    /// `flutter build apk --flavor prod` cannot have written the plain name: it is left over
+    /// from an earlier unflavored build, and packaging it ships the wrong (possibly
+    /// debug-signed) APK as this build's release artifact.
+    #[test]
+    fn a_plain_leftover_is_not_packaged_as_a_flavored_build() {
+        let directory = apk_dir();
+        touch(directory.path(), "app-arm64-v8a-release.apk");
+
+        let error = find_apk(directory.path(), &TargetAbi::Arm64, Some("prod"))
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("with flavor `prod`"), "{error}");
+        assert!(error.contains("app-arm64-v8a-prod-release.apk"), "{error}");
+    }
+
+    #[test]
+    fn an_apk_of_another_flavor_is_not_accepted() {
+        let directory = apk_dir();
+        touch(directory.path(), "app-arm64-v8a-staging-release.apk");
+
+        let error = find_apk(directory.path(), &TargetAbi::Arm64, Some("prod"))
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("app-arm64-v8a-staging-release.apk"),
+            "{error}"
+        );
+    }
+
+    /// AGP lower-cases the flavor in the file name in some versions, which is why the
+    /// comparison against the configured flavor ignores case.
+    ///
+    /// The parsing itself is asserted here rather than through `find_apk`: a case-insensitive
+    /// filesystem answers the exact-name probe with the differently cased file anyway, so the
+    /// fallback path cannot be observed through the file system on every host.
+    #[test]
+    fn the_flavor_is_read_out_of_the_file_name() {
+        let path = |name: &str| Path::new("/tmp").join(name);
+
+        assert_eq!(
+            flavor_in_file_name(&path("app-arm64-v8a-prod-release.apk"), &TargetAbi::Arm64),
+            Some("prod".to_string())
+        );
+        assert_eq!(
+            flavor_in_file_name(&path("app-arm64-v8a-release.apk"), &TargetAbi::Arm64),
+            None,
+            "the plain name carries no flavor"
+        );
+        assert_eq!(
+            flavor_in_file_name(&path("app-armeabi-v7a-prod-release.apk"), &TargetAbi::Arm64),
+            None,
+            "another ABI is not a candidate at all"
         );
     }
 
