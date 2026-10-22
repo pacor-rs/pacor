@@ -64,8 +64,8 @@ formats = ["appimage"]
 #   Additional -> 2DGraphics, FileTools, Player, TextEditor, IDE, GTK, ...
 #
 # Two rules are checked when the configuration is loaded:
-#   * `Additional` categories require at least one `Main` category, otherwise
-#     the entry cannot be placed in any menu (this is an error).
+#   * at least one `Main` category is required, otherwise the entry cannot be
+#     placed in any menu (this is an error). `categories = []` counts as missing.
 #   * every `Additional` category should come with one of its related
 #     categories, e.g. `FileTools` with `Utility`, `TextEditor` with `Utility`.
 #     Violations are reported as warnings.

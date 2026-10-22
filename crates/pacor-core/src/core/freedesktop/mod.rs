@@ -47,12 +47,22 @@ const MAIN_CATEGORY_HINT: &str = "AudioVideo, Development, Game, Graphics, Netwo
 impl Display for CategoryProblem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::MissingMainCategory { additional } => write!(
-                f,
-                "`Categories` lists only additional categories ({}); at least one main category \
-                 is required for the entry to appear in a menu ({MAIN_CATEGORY_HINT})",
-                additional.join(", ")
-            ),
+            Self::MissingMainCategory { additional } => {
+                let listed = if additional.is_empty() {
+                    "`Categories` is empty".to_string()
+                } else {
+                    format!(
+                        "`Categories` lists only additional categories ({})",
+                        additional.join(", ")
+                    )
+                };
+
+                write!(
+                    f,
+                    "{listed}; at least one main category is required for the entry to \
+                     appear in a menu ({MAIN_CATEGORY_HINT})"
+                )
+            }
             Self::UnrelatedAdditional {
                 category,
                 suggested,
@@ -226,14 +236,18 @@ impl FreeDesktop {
             })
             .collect();
 
-        if additional.is_empty() {
-            return Vec::new();
-        }
-
         let has_main_category = self
             .categories
             .iter()
             .any(|category| matches!(category, Category::Main(_)));
+
+        // An empty list is the same defect as a list of additional categories only: no
+        // main category, so no menu the entry could appear in. `categories = []` used to
+        // fall through here and validate, producing a desktop file with no `Categories`
+        // at all — installed, listed in the package, and invisible in every menu.
+        if has_main_category && additional.is_empty() {
+            return Vec::new();
+        }
 
         if !has_main_category {
             let mut names: Vec<String> = additional
