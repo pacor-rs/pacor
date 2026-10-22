@@ -25,6 +25,27 @@ const APPIMAGE_MAGIC_LENGTH: usize = 3;
 const LINUXDEPLOY_BASE_URL: &str =
     "https://github.com/tauri-apps/binary-releases/releases/download/linuxdeploy";
 
+/// Spelling of `arch` in the linuxdeploy file names.
+fn linuxdeploy_arch(arch: &Arch) -> &'static str {
+    match arch {
+        Arch::X64 => "x86_64",
+        Arch::ARM64 => "aarch64",
+    }
+}
+
+/// Pinned SHA-256 of the linuxdeploy build for `arch`.
+///
+/// The URL names a release tag, and a tag is not immutable: its owner can replace the asset at
+/// any time, and neither TLS nor the pinned templates would notice. linuxdeploy is then
+/// executed as part of every AppImage build, so a replaced asset is arbitrary code execution
+/// rather than a bad artifact.
+fn linuxdeploy_sha256(arch: &Arch) -> &'static str {
+    match arch {
+        Arch::X64 => "e762bea85c8eb0d4b3508d46e5c1f037f717d0f9303ae3b4aafc8b04991fa1ef",
+        Arch::ARM64 => "b12b5cc57bd0921e1f98d73f58aa364503bc1a27f54b7a69fd2870bce7fa2f55",
+    }
+}
+
 /// Return the cached `linuxdeploy` binary, downloading it on first use.
 ///
 /// Some desktop environments try to launch any file carrying the AppImage
@@ -34,11 +55,7 @@ pub(super) fn prepare_linuxdeploy_tool(tools_directory: &Path, arch: &Arch) -> R
     let tool_dir = tools_directory.join("appimage");
     ensure_directory_exists(&tool_dir)?;
 
-    let linuxdeploy_arch = match arch {
-        Arch::X64 => "x86_64",
-        Arch::ARM64 => "aarch64",
-    };
-
+    let linuxdeploy_arch = linuxdeploy_arch(arch);
     let path = tool_dir.join(format!("linuxdeploy-{linuxdeploy_arch}.AppImage"));
 
     if !path.exists() {
@@ -47,7 +64,8 @@ pub(super) fn prepare_linuxdeploy_tool(tools_directory: &Path, arch: &Arch) -> R
 
         let data = download_file(&url)
             .with_context(|| format!("failed to download linuxdeploy from {url}"))?;
-        write_executable_file(&path, &data)?;
+        verify_linuxdeploy(&data, arch, &url)?;
+        install_executable(&path, &data)?;
 
         info!(path = %path.display(), "linuxdeploy downloaded");
     }
@@ -55,6 +73,48 @@ pub(super) fn prepare_linuxdeploy_tool(tools_directory: &Path, arch: &Arch) -> R
     clear_appimage_magic(&path)?;
 
     Ok(path)
+}
+
+/// Reject a download that is not the binary the pinned digest describes.
+///
+/// Checked before anything is written into the cache, and the error names both digests because
+/// the reader has to decide between an upstream change and tampering.
+fn verify_linuxdeploy(data: &[u8], arch: &Arch, url: &str) -> Result<()> {
+    let expected = linuxdeploy_sha256(arch);
+    let actual = pacor_core::utils::crypto::sha256_hex(data);
+    if actual == expected {
+        return Ok(());
+    }
+
+    Err(anyhow::anyhow!(
+        "{url} has SHA-256 {actual}, expected {expected}: the pinned release asset was replaced"
+    ))
+}
+
+/// Move a verified download into the cache in one step.
+///
+/// `path.exists()` is the cache check, so a file written directly and left half-finished — a
+/// full disk, a killed process — would be used as the tool on every later run, and its failure
+/// would look like a broken linuxdeploy rather than an interrupted download. The temporary file
+/// is a sibling of the destination, so the rename cannot cross filesystems and the cache either
+/// holds the verified binary or nothing at all.
+fn install_executable(path: &Path, data: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("{} has no parent directory", path.display()))?;
+
+    let staged = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("failed to create a temporary file in {}", parent.display()))?;
+    write_executable_file(staged.path(), data)?;
+    staged.persist(path).map_err(|error| {
+        anyhow::anyhow!(
+            "failed to move the downloaded tool into {}: {}",
+            path.display(),
+            error.error
+        )
+    })?;
+
+    Ok(())
 }
 
 /// Overwrite the AppImage magic bytes with zeroes.
@@ -160,6 +220,75 @@ mod tests {
         data
     }
 
+    /// A truncated or mis-cased paste has to fail here rather than in a user's build, and the two
+    /// architectures must not share a digest by accident.
+    #[test]
+    fn the_pinned_digests_are_full_lowercase_and_distinct() {
+        let digests = [
+            linuxdeploy_sha256(&Arch::X64),
+            linuxdeploy_sha256(&Arch::ARM64),
+        ];
+
+        for digest in digests {
+            assert_eq!(digest.len(), 64, "{digest}");
+            assert!(
+                digest
+                    .chars()
+                    .all(|character| character.is_ascii_digit()
+                        || ('a'..='f').contains(&character)),
+                "lowercase hex only: {digest}"
+            );
+        }
+
+        assert_ne!(digests[0], digests[1]);
+    }
+
+    #[test]
+    fn a_replaced_linuxdeploy_binary_is_refused() {
+        let other = pacor_core::utils::crypto::sha256_hex(b"not linuxdeploy");
+
+        let error = verify_linuxdeploy(b"not linuxdeploy", &Arch::X64, "https://example.com/tool")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains(linuxdeploy_sha256(&Arch::X64)), "{error}");
+        assert!(error.contains(&other), "{error}");
+    }
+
+    /// The cache holds the verified bytes and nothing else: the temporary file the download was
+    /// written to must not survive next to it.
+    #[test]
+    fn a_verified_download_is_installed_without_leaving_staging_files() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("linuxdeploy-x86_64.AppImage");
+
+        install_executable(&path, b"binary").unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), b"binary");
+        let entries: Vec<_> = fs::read_dir(temp.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(entries.len(), 1, "{entries:?}");
+    }
+    /// Downloads the published binaries and checks them against the pins.
+    ///
+    /// Ignored because it needs the network; it is the check to run when refreshing the digests,
+    /// since every other test works from the constants themselves.
+    #[test]
+    #[ignore = "downloads both linuxdeploy AppImages; run when refreshing the pinned digests"]
+    fn the_pinned_digests_match_the_published_binaries() {
+        for arch in [Arch::X64, Arch::ARM64] {
+            let url = format!(
+                "{LINUXDEPLOY_BASE_URL}/linuxdeploy-{}.AppImage",
+                linuxdeploy_arch(&arch)
+            );
+            let data = download_file(&url).expect("the linuxdeploy binary must download");
+
+            verify_linuxdeploy(&data, &arch, &url)
+                .expect("the published binary must match the pin");
+        }
+    }
     #[test]
     fn clearing_the_magic_zeroes_only_bytes_8_to_10() {
         let temp = TempDir::new().unwrap();
