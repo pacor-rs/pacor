@@ -29,13 +29,18 @@ pub struct MacOSBuildConfig {
 
     /// macOS DMG background image
     ///
-    /// Default is None.
+    /// Default is None. See [`Self::dmg_window_size`] for what setting either of the two
+    /// layout options does to the `create-dmg` invocation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dmg_background: Option<String>,
 
     /// macOS DMG window size
     ///
-    /// Default is (500, 350).
+    /// Default is None, which leaves the installer window where Finder puts it and lets the
+    /// DMG step run `create-dmg` in its sandbox-safe mode. Setting this or
+    /// [`Self::dmg_background`] makes pacor drop that flag instead, because the window is laid
+    /// out by a Finder AppleScript — which needs a GUI session and Finder automation
+    /// permission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dmg_window_size: Option<(u32, u32)>,
 
@@ -69,10 +74,25 @@ impl Default for MacOSBuildConfig {
             minimum_system_version: Some("10.14".to_string()),
             category: Some("public.app-category.entertainment".to_string()),
             dmg_background: None,
-            dmg_window_size: Some((500, 350)),
+            dmg_window_size: None,
             codesign_identity: None,
             codesign_entitlements: None,
             notarize_credentials: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A configured window layout makes the DMG step drop `--sandbox-safe` and run the Finder
+    /// AppleScript, so a project that configures nothing must not get one from the default.
+    #[test]
+    fn the_default_config_asks_for_no_window_layout() {
+        let config = MacOSBuildConfig::default();
+
+        assert_eq!(config.dmg_window_size, None);
+        assert_eq!(config.dmg_background, None);
     }
 }

@@ -125,7 +125,9 @@ enabled = true
 minimum_system_version = "10.14"
 category = "public.app-category.entertainment"
 # Both lay the installer window out with Finder automation, so setting either
-# makes pacor drop its `--sandbox-safe` create-dmg flag for that run.
+# makes pacor drop its `--sandbox-safe` create-dmg flag for that run; the
+# AppleScript then needs a GUI session and Finder automation permission. Neither
+# is set by default.
 # dmg_background = "assets/dmg-background.png"
 # dmg_window_size = [500, 350]
 # codesign_identity = "Developer ID Application: ..."
