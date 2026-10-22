@@ -126,6 +126,24 @@ formats = ["apk"]                                  # 上架 Play 用 ["apk", "aa
 [docs/ANDROID.md](docs/ANDROID.zh-CN.md)。
 `PACOR_OUTPUT_DIR` 与 `PACOR_BUILD_MODE` 会覆盖 `[build]` 中的对应项。
 
+## macOS 平台
+
+`pacor build --target macos` 会把安装镜像与更新归档写入输出目录，各自附带一个 `.sha1`：
+
+```
+dist/MyApp-1.0.0+1-arm64.dmg
+dist/MyApp-1.0.0+1-arm64.app.tar.gz
+```
+
+配置了 `platforms.macos.codesign_identity` 时，`.app` 由内向外签名——先签嵌套的 framework
+与 dylib，再签 bundle；镜像构建完成后再单独签名。`platforms.macos.notarize_credentials` 会把
+镜像提交给 Apple 公证并装订票据，这两步才能让下载到本地的副本不再触发 Gatekeeper 警告。
+`platforms.macos` 里还有 bundle identifier、最低系统版本与 App Store 分类，pacor 会把它们写入
+构建产出的 `Info.plist`；`[app.i18n]` 则变成每种语言一个 `.lproj`。
+
+[`docs/MACOS.md`](docs/MACOS.md) 记录产物、配置项、签名与公证流程、缓存布局，以及这些布局能
+解释的失败。
+
 ## Windows 平台
 
 `pacor build --target windows` 会在输出目录写入 NSIS 安装包，以及（`build_portable = false`

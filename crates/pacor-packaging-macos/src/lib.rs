@@ -16,6 +16,8 @@
 //!
 //! This module is compiled on every host; whether the macOS toolchain is
 //! available is decided by [`MacOSAppBuilder::validate`] at runtime.
+//!
+//! The user-facing description of this workflow is `docs/MACOS.md`.
 
 #[macro_use]
 extern crate tracing;
