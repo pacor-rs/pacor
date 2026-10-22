@@ -4,11 +4,13 @@
 //! in the binary and materialised under the user's config directory on first
 //! use, so no extra download is required.
 
-use std::{fs, path::Path};
+use std::path::Path;
 
 use anyhow::Result;
 
-use pacor_core::utils::fs::{ensure_directory_exists, write_executable_file};
+use pacor_core::utils::fs::{
+    ensure_directory_exists, write_executable_file, write_file_atomically,
+};
 
 const EULA_RESOURCES_TEMPLATE_XML: &str =
     include_str!("../../../tools/macos/support/eula-resources-template.xml");
@@ -50,6 +52,5 @@ fn write_if_absent(path: &Path, contents: &[u8]) -> Result<()> {
         return Ok(());
     }
     trace!(path = %path.display(), "Installing template");
-    fs::write(path, contents)?;
-    Ok(())
+    write_file_atomically(path, contents)
 }

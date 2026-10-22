@@ -153,17 +153,56 @@ pub fn package_relative_path(target: &Path) -> Result<PathBuf, PackagePathProble
 
 /// Write a file and, on unix, mark it executable.
 pub fn write_executable_file(path: &Path, data: &[u8]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(path, data)?;
+    write_atomically(path, |staged| {
+        fs::write(staged, data)?;
+        set_executable_permissions(staged)
+    })
+}
 
+/// Write a file, replacing whatever is there in one step.
+///
+/// Use this for anything a later run decides to keep by asking whether the path exists. A file
+/// written in place can be observed half-finished, and a truncated template or script then looks
+/// like a broken file rather than the interrupted download that produced it — deleting it by
+/// hand is the only cure. The bytes go to a temporary sibling, which is on the same filesystem
+/// by construction, so the destination ends up either absent or complete.
+pub fn write_file_atomically(path: &Path, data: &[u8]) -> Result<()> {
+    write_atomically(path, |staged| fs::write(staged, data).map_err(Into::into))
+}
+
+/// Run `write` against a temporary sibling of `path` and move it into place.
+fn write_atomically(path: &Path, write: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        anyhow::anyhow!(
+            "{} has no parent directory to stage a file in",
+            path.display()
+        )
+    })?;
+    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+
+    let staged = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("failed to create a temporary file in {}", parent.display()))?;
+    write(staged.path())?;
+    staged.persist(path).map_err(|error| {
+        anyhow::anyhow!(
+            "failed to move the new file into {}: {}",
+            path.display(),
+            error.error
+        )
+    })?;
+
+    Ok(())
+}
+
+/// Mark a file executable, on the platforms that have the concept.
+fn set_executable_permissions(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
     }
 
+    let _ = path;
     Ok(())
 }
 
@@ -222,6 +261,74 @@ mod tests {
     /// copy used to run `fs::copy` before anything created `dst`, so it only worked when the
     /// filesystem happened to list a directory first. APFS lists the executable first, which
     /// is how this failed on macOS and nowhere else.
+    /// The cache checks are `path.exists()`, so a write that fails halfway must not leave
+    /// anything for the next run to keep.
+    #[test]
+    fn a_failed_atomic_write_leaves_no_file_behind() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("template.nsi");
+
+        let error = write_atomically(&path, |_| Err(anyhow::anyhow!("disk full")))
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("disk full"), "{error}");
+        assert!(!path.exists(), "a failed write must not be cached");
+        assert_eq!(
+            stdfs::read_dir(temp.path()).unwrap().count(),
+            0,
+            "the staging file must be cleaned up"
+        );
+    }
+
+    #[test]
+    fn an_atomic_write_replaces_what_was_there() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("main.wxs");
+        stdfs::write(&path, "old").unwrap();
+
+        write_file_atomically(&path, b"new").unwrap();
+
+        assert_eq!(stdfs::read(&path).unwrap(), b"new");
+        assert_eq!(stdfs::read_dir(temp.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn an_atomic_write_creates_the_directory_it_needs() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("wix/1.1/template.wxl");
+
+        write_file_atomically(&path, b"culture").unwrap();
+
+        assert_eq!(stdfs::read(&path).unwrap(), b"culture");
+    }
+
+    /// A script that is executed must never be cached half-written: a truncated shell script
+    /// still runs, with whatever commands survived.
+    #[test]
+    fn an_executable_file_is_written_in_one_step() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("create-dmg.sh");
+
+        write_executable_file(&path, b"#!/bin/sh\n").unwrap();
+
+        assert_eq!(stdfs::read(&path).unwrap(), b"#!/bin/sh\n");
+        assert_eq!(stdfs::read_dir(temp.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_executable_file_carries_the_execute_bit() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("create-dmg.sh");
+
+        write_executable_file(&path, b"#!/bin/sh\n").unwrap();
+
+        let mode = stdfs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o111, 0o111, "{mode:o}");
+    }
     #[test]
     fn copy_dir_creates_the_destination_itself() {
         let temp = TempDir::new().unwrap();

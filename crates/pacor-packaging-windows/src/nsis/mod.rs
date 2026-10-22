@@ -32,7 +32,7 @@ use pacor_core::{
         archive::extract_zip,
         command::{CommandOutputMode, execute_command, find_command_path, macros::command_args},
         downloader::download_file,
-        fs::ensure_directory_exists,
+        fs::{ensure_directory_exists, write_file_atomically},
     },
 };
 
@@ -366,7 +366,7 @@ fn download_to(url: &str, destination: &Path) -> Result<()> {
     debug!(url, path = %destination.display(), "Downloading template file");
 
     let data = download_file(url).with_context(|| format!("failed to download {url}"))?;
-    fs::write(destination, &data)
+    write_file_atomically(destination, &data)
         .with_context(|| format!("failed to write {}", destination.display()))?;
 
     trace!(path = %destination.display(), bytes = data.len(), "Template file cached");

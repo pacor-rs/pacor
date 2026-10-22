@@ -14,7 +14,11 @@ use anyhow::{Context, Result};
 
 use pacor_core::{
     error::PlatformError,
-    utils::{archive::extract_zip, downloader::download_file, fs::ensure_directory_exists},
+    utils::{
+        archive::extract_zip,
+        downloader::download_file,
+        fs::{ensure_directory_exists, write_file_atomically},
+    },
 };
 
 /// The WiX release pacor is written against.
@@ -101,7 +105,7 @@ fn ensure_templates(install_dir: &Path) -> Result<()> {
 
     for (url, destination) in pending {
         let data = download_file(&url).with_context(|| format!("failed to download {url}"))?;
-        fs::write(&destination, &data)
+        write_file_atomically(&destination, &data)
             .with_context(|| format!("failed to write {}", destination.display()))?;
         tracing::trace!(path = %destination.display(), "WiX template cached");
     }
