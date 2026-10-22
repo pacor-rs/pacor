@@ -123,6 +123,9 @@ impl<'a> AppImageBuilder<'a> {
         let desktop_file =
             app_dir.write_desktop_file(self.config.app_executable_name, self.config.desktop)?;
 
+        // Bounds what counts as this build's output: see `finalize_appimage`.
+        let build_started_at = std::time::SystemTime::now();
+
         tool::run_linuxdeploy(
             &linuxdeploy,
             &app_dir,
@@ -140,6 +143,7 @@ impl<'a> AppImageBuilder<'a> {
                 self.config.app_display_name,
                 self.config.app_executable_name,
             ],
+            build_started_at,
         )?;
 
         info!(path = %final_path.display(), "AppImage build completed");

@@ -5,6 +5,7 @@
 //! renames it, and makes it executable.
 
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 use std::{fs, io};
 
 use anyhow::{Context, Result};
@@ -31,13 +32,21 @@ fn normalize_for_matching(name: &str) -> String {
 /// left in the output directory must never replace it. When linuxdeploy ignored
 /// `OUTPUT` and wrote a differently named file, that file is newer than
 /// `expected_path` and is moved into place instead.
+///
+/// `build_started_at` is what keeps a *previous* build from being reported as this
+/// one: an `expected_path` (or a candidate) older than the moment linuxdeploy was
+/// started cannot have been written by it. Without that bound, a run whose linuxdeploy
+/// exited zero without writing anything returned the leftover file with the same name,
+/// and the release published the previous version under the new name and checksum.
 pub(super) fn finalize_appimage(
     output_dir: &Path,
     expected_path: &Path,
     name_prefixes: &[&str],
+    build_started_at: SystemTime,
 ) -> Result<PathBuf> {
-    let expected_modified = modified_time(expected_path);
-    let candidate = find_candidate(output_dir, expected_path, name_prefixes)?;
+    let expected_modified =
+        modified_time(expected_path).filter(|modified| *modified >= build_started_at);
+    let candidate = find_candidate(output_dir, expected_path, name_prefixes, build_started_at)?;
 
     let generated = match (&candidate, expected_modified) {
         (Some((candidate_modified, candidate)), Some(expected_modified))
@@ -70,15 +79,25 @@ pub(super) fn finalize_appimage(
             "AppImage renamed to the expected artifact name"
         );
     } else if expected_modified.is_none() {
+        let leftover = if expected_path.exists() {
+            format!(
+                "; {} exists but was written before the build started, so it was left in place",
+                expected_path.display()
+            )
+        } else {
+            String::new()
+        };
+
         return Err(anyhow::anyhow!(
             "linuxdeploy did not produce an AppImage in {} (looked for names starting with: \
-             {}, or {})",
+             {}, or {}){}",
             output_dir.display(),
             name_prefixes.join(", "),
             expected_path
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default()
+                .unwrap_or_default(),
+            leftover
         ));
     } else {
         trace!(path = %expected_path.display(), "linuxdeploy used the expected name");
@@ -105,6 +124,7 @@ fn find_candidate(
     output_dir: &Path,
     expected_path: &Path,
     name_prefixes: &[&str],
+    build_started_at: SystemTime,
 ) -> Result<Option<(std::time::SystemTime, PathBuf)>> {
     let entries = match fs::read_dir(output_dir) {
         Ok(entries) => entries,
@@ -138,7 +158,11 @@ fn find_candidate(
         let modified = path
             .metadata()
             .and_then(|metadata| metadata.modified())
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        // Older than the build: a leftover, never this run's output.
+        if modified < build_started_at {
+            continue;
+        }
         candidates.push((modified, path));
     }
 
@@ -188,6 +212,11 @@ mod tests {
             .unwrap();
     }
 
+    /// The moment the build started, five minutes ago: a file aged ten minutes is a
+    /// leftover, one written just now is this run's output.
+    fn build_start() -> SystemTime {
+        SystemTime::now() - Duration::from_secs(300)
+    }
     #[test]
     fn uses_a_differently_named_output_and_renames_it() {
         let temp = TempDir::new().unwrap();
@@ -198,7 +227,7 @@ mod tests {
             Duration::ZERO,
         );
 
-        let result = finalize_appimage(temp.path(), &expected, &PREFIXES).unwrap();
+        let result = finalize_appimage(temp.path(), &expected, &PREFIXES, build_start()).unwrap();
 
         assert_eq!(result, expected);
         assert_eq!(fs::read_to_string(&expected).unwrap(), "fresh");
@@ -208,13 +237,34 @@ mod tests {
         );
     }
 
+    /// A leftover carrying the expected name was reported as this build when linuxdeploy
+    /// exited zero without writing anything: the release then published the previous
+    /// binary under the new version and its `.sha256`.
+    #[test]
+    fn a_leftover_artifact_is_not_reported_as_this_build() {
+        let temp = TempDir::new().unwrap();
+        let expected = temp.path().join("Demo-1.0.0-x64.AppImage");
+        write_at(&expected, "leftover", Duration::from_secs(600));
+
+        let error = finalize_appimage(temp.path(), &expected, &PREFIXES, build_start())
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("did not produce an AppImage"), "{error}");
+        assert!(error.contains("left in place"), "{error}");
+        assert_eq!(
+            fs::read_to_string(&expected).unwrap(),
+            "leftover",
+            "the leftover is left alone, neither adopted nor deleted"
+        );
+    }
     #[test]
     fn keeps_the_expected_name_when_linuxdeploy_used_it() {
         let temp = TempDir::new().unwrap();
         let expected = temp.path().join("demo-1.0.0-x64.AppImage");
         write_at(&expected, "direct", Duration::ZERO);
 
-        let result = finalize_appimage(temp.path(), &expected, &PREFIXES).unwrap();
+        let result = finalize_appimage(temp.path(), &expected, &PREFIXES, build_start()).unwrap();
 
         assert_eq!(fs::read_to_string(result).unwrap(), "direct");
     }
@@ -235,7 +285,7 @@ mod tests {
             Duration::ZERO,
         );
 
-        finalize_appimage(temp.path(), &expected, &PREFIXES).unwrap();
+        finalize_appimage(temp.path(), &expected, &PREFIXES, build_start()).unwrap();
 
         assert_eq!(fs::read_to_string(&expected).unwrap(), "fresh");
     }
@@ -252,7 +302,7 @@ mod tests {
             Duration::ZERO,
         );
 
-        finalize_appimage(temp.path(), &expected, &PREFIXES).unwrap();
+        finalize_appimage(temp.path(), &expected, &PREFIXES, build_start()).unwrap();
 
         assert_eq!(
             fs::read_to_string(&expected).unwrap(),
@@ -275,7 +325,7 @@ mod tests {
             Duration::from_secs(600),
         );
 
-        let result = finalize_appimage(temp.path(), &expected, &PREFIXES).unwrap();
+        let result = finalize_appimage(temp.path(), &expected, &PREFIXES, build_start()).unwrap();
 
         assert_eq!(fs::read_to_string(&result).unwrap(), "fresh");
         assert!(
@@ -295,7 +345,8 @@ mod tests {
         );
         write_at(&temp.path().join("Demo.tar.gz"), "archive", Duration::ZERO);
 
-        let error = finalize_appimage(temp.path(), &expected, &PREFIXES).unwrap_err();
+        let error =
+            finalize_appimage(temp.path(), &expected, &PREFIXES, build_start()).unwrap_err();
 
         assert!(error.to_string().contains("did not produce an AppImage"));
     }
@@ -305,8 +356,13 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let expected = temp.path().join("out/Demo.AppImage");
 
-        let error =
-            finalize_appimage(&temp.path().join("absent"), &expected, &PREFIXES).unwrap_err();
+        let error = finalize_appimage(
+            &temp.path().join("absent"),
+            &expected,
+            &PREFIXES,
+            build_start(),
+        )
+        .unwrap_err();
 
         assert!(error.to_string().contains("did not produce an AppImage"));
     }
@@ -320,7 +376,7 @@ mod tests {
         let expected = temp.path().join("Demo-1.0.0-x64.AppImage");
         write_at(&temp.path().join("Demo.AppImage"), "bin", Duration::ZERO);
 
-        let result = finalize_appimage(temp.path(), &expected, &PREFIXES).unwrap();
+        let result = finalize_appimage(temp.path(), &expected, &PREFIXES, build_start()).unwrap();
 
         let mode = fs::metadata(&result).unwrap().permissions().mode();
         assert_eq!(mode & 0o111, 0o111, "AppImage must be executable by all");
@@ -334,7 +390,8 @@ mod tests {
         let expected = output_dir.join("my_app-1.0.0-x64.AppImage");
         fs::write(output_dir.join("My_App-x86_64.AppImage"), "appimage").unwrap();
 
-        let result = finalize_appimage(output_dir, &expected, &["My App", "my_app"]).unwrap();
+        let result =
+            finalize_appimage(output_dir, &expected, &["My App", "my_app"], build_start()).unwrap();
 
         assert_eq!(result, expected);
         assert!(expected.exists());
@@ -356,7 +413,7 @@ mod tests {
         let expected = output_dir.join("my_app-1.0.0-x64.AppImage");
         fs::write(output_dir.join("SomethingElse-x86_64.AppImage"), "other").unwrap();
 
-        let error = finalize_appimage(output_dir, &expected, &["My App", "my_app"])
+        let error = finalize_appimage(output_dir, &expected, &["My App", "my_app"], build_start())
             .expect_err("an unrelated artifact must not be adopted");
 
         // The message must name the file pacor wanted, to make `OUTPUT` obvious.
