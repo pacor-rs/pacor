@@ -406,7 +406,16 @@ fn fetch_into(
                     // Resumed earlier than asked: drop the bytes past that point.
                     bytes.truncate(start as usize);
                 }
-                Some(_) => {}
+                Some(start) if start == bytes.len() as u64 => {}
+                // Resumed past what we hold: appending would splice a body that starts
+                // further on, and the file would be missing `start - bytes.len()` bytes in
+                // the middle with nothing to show for it. One attempt cannot repair that.
+                Some(start) => {
+                    let have = bytes.len();
+                    return Err(FetchFailure::Unexpected(format!(
+                        "{url} resumed at {start} after {have} bytes: the file would have a gap"
+                    )));
+                }
                 None => {
                     return Err(FetchFailure::Unexpected(format!(
                         "{url} answered 206 without a range start"
@@ -980,6 +989,9 @@ mod tests {
         /// Like [`Behavior::TruncateFirstOnce`], but later responses ignore
         /// `Range` and start from the beginning again.
         TruncateFirstOnceIgnoringRange { bytes: usize },
+        /// The first response stops after `bytes`; the second answers the
+        /// range request from `bytes` further on, leaving a gap.
+        TruncateFirstOnceThenSkip { bytes: usize, skip: usize },
         /// Every response stops after `bytes`, honouring `Range`, so each
         /// attempt makes a little progress.
         AlwaysTruncate { bytes: usize },
@@ -1067,16 +1079,22 @@ mod tests {
         }
 
         let honours_range = !matches!(behavior, Behavior::TruncateFirstOnceIgnoringRange { .. });
-        let start = if honours_range {
+        let mut start = if honours_range {
             requested_start.min(body.len())
         } else {
             0
         };
+        if let Behavior::TruncateFirstOnceThenSkip { bytes, skip } = behavior
+            && request_index > 1
+        {
+            start = (start.max(bytes) + skip).min(body.len());
+        }
         let slice = &body[start..];
 
         let truncate_after = match behavior {
             Behavior::TruncateFirstOnce { bytes } if request_index == 1 => Some(bytes),
             Behavior::TruncateFirstOnceIgnoringRange { bytes } if request_index == 1 => Some(bytes),
+            Behavior::TruncateFirstOnceThenSkip { bytes, .. } if request_index == 1 => Some(bytes),
             Behavior::AlwaysTruncate { bytes } => Some(bytes),
             _ => None,
         };
@@ -1118,6 +1136,28 @@ mod tests {
         (0..len).map(|index| (index % 251) as u8).collect()
     }
 
+    /// A server that resumes past the bytes already received would leave a hole in the middle
+    /// of the file. Appending the remainder anyway produced an artifact that looks complete —
+    /// plausible length, wrong contents — so the transfer has to fail instead.
+    #[test]
+    fn a_resume_that_skips_bytes_is_refused() {
+        let body = body_of(300_000);
+        let server = TestServer::start(
+            body.clone(),
+            Behavior::TruncateFirstOnceThenSkip {
+                bytes: 100_000,
+                skip: 1_024,
+            },
+            4,
+        );
+
+        let error = download_with_resume(&test_agent(), &server.url(), test_policy(3))
+            .expect_err("a gap in the middle of the file cannot be accepted")
+            .to_string();
+
+        assert!(error.contains("gap"), "{error}");
+        assert_eq!(server.requests(), 2, "the second answer is unusable");
+    }
     #[test]
     fn a_dropped_transfer_resumes_from_where_it_stopped() {
         let body = body_of(300_000);
