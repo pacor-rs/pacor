@@ -69,7 +69,8 @@ under the user configuration directory (default icon set, build templates,
 `linuxdeploy`, NSIS). Everything removed is fetched again on demand, so
 `--dry-run` lists it first.
 
-Global flags: `--config <path>` (defaults to `pacor.toml` in the project root),
+Global flags: `--config <path>` (defaults to `pacor.toml` in the project root; an
+explicitly named file must exist),
 `--command-output <none|normal|verbose>` (external command output),
 `-l/--log-level <error|warn|info|debug>`.
 
