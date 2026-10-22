@@ -47,6 +47,15 @@ mod generator;
 const NSIS_DOWNLOAD_URL: &str =
     "https://github.com/tauri-apps/binary-releases/releases/download/nsis-3/nsis-3.zip";
 
+/// SHA-256 of the archive that URL serves (2,346,723 bytes).
+///
+/// The URL names a *release tag*, and a tag is not immutable: its owner can replace the asset
+/// at any time, and neither TLS nor the pinned templates would notice. The digest is what makes
+/// the download the same compiler the templates were written against — see `docs/WINDOWS.md`
+/// for how to refresh it.
+const NSIS_ARCHIVE_SHA256: &str =
+    "1bb9fc85ee5b220d3869325dbb9d191dfe6537070f641c30fbb275c97051fd0c";
+
 /// Template files needed to compile an installer, as
 /// `(path in the pinned tag, path inside pacor's cache)`.
 const NSIS_TEMPLATE_FILES: &[(&str, &str)] = &[
@@ -63,6 +72,23 @@ const NSPROCESS_INCLUDE: &str = "nsProcess.nsh";
 
 /// Plugin DLL the template calls through that include.
 const NSPROCESS_DLL: &str = "nsProcess.dll";
+
+/// Reject an archive that is not the one [`NSIS_ARCHIVE_SHA256`] describes.
+///
+/// Checked before anything is written to the cache, so a replaced asset cannot leave a
+/// half-installed toolchain behind. The error names both digests, because the reader has to
+/// decide whether upstream replaced the file or the download was tampered with.
+fn verify_archive(bytes: &[u8]) -> Result<()> {
+    let actual = pacor_core::utils::crypto::sha256_hex(bytes);
+    if actual == NSIS_ARCHIVE_SHA256 {
+        return Ok(());
+    }
+
+    Err(anyhow::anyhow!(
+        "the NSIS archive from {NSIS_DOWNLOAD_URL} has SHA-256 {actual}, but {NSIS_ARCHIVE_SHA256} \
+         was expected; the release asset is not the one pacor was pinned to"
+    ))
+}
 
 pub(super) struct NsisBuilder<'a> {
     /// Common builder functionality
@@ -193,6 +219,7 @@ impl<'a> NsisBuilder<'a> {
 
         info!("Installing NSIS...");
         let archive_bytes = download_file(NSIS_DOWNLOAD_URL)?;
+        verify_archive(&archive_bytes)?;
         ensure_directory_exists(self.nsis_install_dir)?;
 
         trace!(nsis_dir = %self.nsis_install_dir.display(), "Extracting NSIS");
@@ -441,6 +468,44 @@ mod tests {
     }
 
     /// Every template file must be fetched from the pinned tag, never a branch.
+    /// The digest is the whole point of the check, so a truncated or mis-cased paste has to fail
+    /// here rather than in a user's build.
+    #[test]
+    fn the_pinned_digest_is_a_full_sha256() {
+        assert_eq!(NSIS_ARCHIVE_SHA256.len(), 64, "{NSIS_ARCHIVE_SHA256}");
+        assert!(
+            NSIS_ARCHIVE_SHA256
+                .chars()
+                .all(|character| character.is_ascii_digit() || ('a'..='f').contains(&character)),
+            "lowercase hex only: {NSIS_ARCHIVE_SHA256}"
+        );
+    }
+
+    /// A replaced release asset has to stop the build before anything reaches the cache, and the
+    /// error has to name both digests so the reader can tell tampering from an upstream change.
+    #[test]
+    fn a_replaced_nsis_archive_is_refused() {
+        let other = pacor_core::utils::crypto::sha256_hex(b"not the pinned archive");
+
+        let error = verify_archive(b"not the pinned archive")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains(NSIS_ARCHIVE_SHA256), "{error}");
+        assert!(error.contains(&other), "{error}");
+    }
+
+    /// Downloads the published archive and checks it against the pin.
+    ///
+    /// Ignored because it needs the network; it is the check to run when refreshing
+    /// [`NSIS_ARCHIVE_SHA256`], since every other test here works from the constant itself.
+    #[test]
+    #[ignore = "downloads the NSIS archive; run when refreshing the pinned digest"]
+    fn the_pinned_digest_matches_the_published_archive() {
+        let bytes = download_file(NSIS_DOWNLOAD_URL).expect("the NSIS archive must download");
+
+        verify_archive(&bytes).expect("the published archive must match the pin");
+    }
     #[test]
     fn template_files_come_from_the_pinned_tag() {
         for (remote, local) in NSIS_TEMPLATE_FILES {

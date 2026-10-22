@@ -24,6 +24,7 @@ zip.workspace = true
 flate2.workspace = true
 tar.workspace = true
 sha1.workspace = true
+sha2.workspace = true
 
 # `ureq` is declared per target rather than in [workspace.dependencies], because the
 # TLS backend is the one dependency where the platforms genuinely differ.

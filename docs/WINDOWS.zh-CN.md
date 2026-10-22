@@ -138,6 +138,17 @@ Flutter 生成的可执行文件名来自 `windows/CMakeLists.txt` 中的 `BINAR
 若系统级 NSIS 需要管理员权限才能写入插件目录，或它其实是 NSIS 2（无法编译 `Unicode True`
 模板），pacor 会给出警告并改用自身缓存，而不会构建失败。
 
+下载内容在解压前会与固定的 SHA-256（`crates/pacor-packaging-windows/src/nsis/mod.rs` 中的
+`NSIS_ARCHIVE_SHA256`）比对。该 URL 指向的是发行版 *tag*，而 tag 并非不可变：其所有者随时可以
+替换资产，TLS 和固定的模板都不会察觉。上游有意变更后需要更新这个固定值时，运行那个会下载已发布
+归档并校验的忽略测试：
+
+```bash
+cargo test -p pacor-packaging-windows -- --ignored the_pinned_digest_matches_the_published_archive
+# 或者不检出仓库：
+curl -sL https://github.com/tauri-apps/binary-releases/releases/download/nsis-3/nsis-3.zip | sha256sum
+```
+
 缓存位于 `<用户配置目录>/pacor/windows/nsis/<模板 tag>`，在 Windows 上即
 `%APPDATA%\pacor\windows\nsis\1.1\`。该目录同时保存 NSIS 发行版与固定 tag 的模板：
 
