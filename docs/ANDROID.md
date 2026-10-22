@@ -235,7 +235,8 @@ The signing command (with `apksigner`'s argument style):
 
 ```
 apksigner sign --ks <keystore> --ks-key-alias <alias> \
-    --ks-pass <password source> --key-pass <password source> <apk>
+    --ks-pass <password source> --key-pass <password source> \
+    --v4-signing-enabled false <apk>
 ```
 
 The password source has two spellings: when the password comes from an environment
@@ -246,7 +247,8 @@ password as a `signtool /p` argument: it shows up in the process list, so it is 
 recommended).
 
 The signature schemes (v1/v2/v3) are left to `apksigner`, which picks them from the APK's
-own `minSdkVersion` / `targetSdkVersion`; pacor passes no `--v*-signing-enabled`. The
+own `minSdkVersion` / `targetSdkVersion`; pacor passes none of the v1/v2/v3 switches (v4
+is the exception below). The
 APK's zipalign alignment is done by AGP's release build, and `apksigner` re-signing
 preserves it, so pacor needs no separate `zipalign` step.
 

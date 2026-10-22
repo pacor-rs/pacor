@@ -203,7 +203,8 @@ arm64-v8a”，同时让 Flutter 构建全部 ABI，导致产物比配置少）�
 
 ```
 apksigner sign --ks <keystore> --ks-key-alias <alias> \
-    --ks-pass <口令来源> --key-pass <口令来源> <apk>
+    --ks-pass <口令来源> --key-pass <口令来源> \
+    --v4-signing-enabled false <apk>
 ```
 
 口令来源有两种写法：口令来自环境变量时用 `env:PACOR_ANDROID_KEYSTORE_PASSWORD`
@@ -211,7 +212,8 @@ apksigner sign --ks <keystore> --ks-key-alias <alias> \
 （与 Windows 后端把口令作为 `signtool /p` 参数的做法相同，会出现在进程列表中，因此不建议）。
 
 签名方案（v1/v2/v3）交给 `apksigner` 按 APK 自身的 `minSdkVersion` / `targetSdkVersion`
-决定，pacor 不传 `--v*-signing-enabled`。APK 的 zipalign 对齐由 AGP 的 release 构建完成，
+决定，pacor 不传 v1/v2/v3 的开关（v4 是下面的例外）。APK 的 zipalign 对齐由 AGP 的 release
+构建完成，
 `apksigner` 重签会保留对齐，因此 pacor 不需要额外的 `zipalign` 步骤。
 
 两处例外，都是为了让 `dist/` 里只有 pacor 报告并校验过的文件：
