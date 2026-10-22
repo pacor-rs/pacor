@@ -65,6 +65,40 @@ pub struct MacOSAppBuilder<'a> {
     build_mode: FlutterBuildMode,
 }
 
+impl MacOSAppBuilder<'_> {
+    /// The entitlements file the bundle has to be re-signed with.
+    ///
+    /// Entitlements live inside the signature, so re-signing without them drops the
+    /// sandbox and network access the app was built with — an app that then fails at
+    /// runtime for a reason nothing in the build log mentions. Configuration wins;
+    /// otherwise the file Flutter generated for this build mode is used, which is the
+    /// one Xcode would have signed with.
+    fn entitlements_path(&self) -> Result<Option<PathBuf>> {
+        if let Some(configured) = self.macos_config.codesign_entitlements.as_deref() {
+            let path = self.project_root.join(configured);
+            if !path.is_file() {
+                return Err(anyhow!(
+                    "`codesign_entitlements` points at `{}`, which is not a file",
+                    path.display()
+                ));
+            }
+            return Ok(Some(path));
+        }
+
+        let file_name = match self.build_mode {
+            FlutterBuildMode::Release => "Release.entitlements",
+            FlutterBuildMode::Debug | FlutterBuildMode::Profile => "DebugProfile.entitlements",
+        };
+        let generated = self
+            .project_root
+            .join("macos")
+            .join("Runner")
+            .join(file_name);
+
+        Ok(generated.is_file().then_some(generated))
+    }
+}
+
 impl<'a> BundleBuilder for MacOSAppBuilder<'a> {
     type Config = &'a PacorConfig;
     type Output = Vec<BuildArtifact>;
@@ -157,6 +191,20 @@ impl<'a> BundleBuilder for MacOSAppBuilder<'a> {
             &self.arch,
         );
 
+        // The bundle is signed before the image is built from it: a signature seals the
+        // bytes it contains, so signing afterwards would seal an unsigned copy.
+        if let Some(identity) = self.macos_config.codesign_identity.as_deref() {
+            let entitlements = self.entitlements_path()?;
+            signing::sign_app_bundle(
+                identity,
+                &app_bundle_path,
+                entitlements.as_deref(),
+                &command_output_mode,
+            )?;
+        } else {
+            debug!("Code signing disabled: no signing identity configured");
+        }
+
         let dmg_path = dmg::create_dmg_installer(
             &dmg::DmgOptions {
                 create_dmg_script: &self.create_dmg_script_path,
@@ -173,8 +221,6 @@ impl<'a> BundleBuilder for MacOSAppBuilder<'a> {
 
         if let Some(identity) = self.macos_config.codesign_identity.as_deref() {
             signing::sign_dmg(identity, &dmg_path, &command_output_mode)?;
-        } else {
-            debug!("Code signing disabled: no signing identity configured");
         }
 
         if let Some(profile) = self.macos_config.notarize_credentials.as_deref() {

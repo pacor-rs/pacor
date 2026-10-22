@@ -45,6 +45,15 @@ pub struct MacOSBuildConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codesign_identity: Option<String>,
 
+    /// Entitlements applied when the bundle is signed
+    ///
+    /// Default is None, which means the file Flutter generated for the build
+    /// mode is used (`macos/Runner/Release.entitlements`, or
+    /// `DebugProfile.entitlements` for debug and profile builds). Relative
+    /// paths are resolved against the project root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codesign_entitlements: Option<String>,
+
     /// macOS notarize credentials
     ///
     /// Default is None.
@@ -62,6 +71,7 @@ impl Default for MacOSBuildConfig {
             dmg_background: None,
             dmg_window_size: Some((500, 350)),
             codesign_identity: None,
+            codesign_entitlements: None,
             notarize_credentials: None,
         }
     }

@@ -119,6 +119,13 @@ category = "public.app-category.entertainment"
 # dmg_background = "assets/dmg-background.png"
 # dmg_window_size = [500, 350]
 # codesign_identity = "Developer ID Application: ..."
+# Signed with the hardened runtime and a timestamp, which notarization requires.
+# The app is signed inside out (frameworks first) before the DMG is built from it.
+# Entitlements are part of the signature: when this is left out, the file Flutter
+# generated for the build mode is used (macos/Runner/Release.entitlements, or
+# DebugProfile.entitlements for debug/profile), so re-signing does not drop the
+# sandbox. Point it somewhere else to override that.
+# codesign_entitlements = "macos/Runner/Release.entitlements"
 # notarize_credentials = "AC_PASSWORD"   # notarytool keychain profile
 
 # ---------------------------------------------------------------------------
