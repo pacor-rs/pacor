@@ -1,7 +1,7 @@
 use std::{
     ffi::{OsStr, OsString},
     path::Path,
-    process::{Command, Stdio},
+    process::{Command, ExitStatus, Stdio},
 };
 
 use anyhow::Result;
@@ -164,11 +164,16 @@ fn configure_output(command: &mut Command, mode: &CommandOutputMode) {
 
 /// Execute command and check its exit status.
 fn execute_and_check_status(mut command: Command, program: &OsStr) -> Result<(), CommandError> {
-    let status = command.status().map_err(|e| {
-        error!("Failed to execute '{}': {}", program.display(), e);
+    check_status(command.status(), program)
+}
+
+/// Turn a wait result into an error unless the command exited successfully.
+fn check_status(status: std::io::Result<ExitStatus>, program: &OsStr) -> Result<(), CommandError> {
+    let status = status.map_err(|error| {
+        error!("Failed to execute '{}': {}", program.display(), error);
         CommandError::Execute {
             command: program.to_os_string(),
-            error: e,
+            error,
         }
     })?;
 
@@ -185,6 +190,51 @@ fn execute_and_check_status(mut command: Command, program: &OsStr) -> Result<(),
     }
 
     Ok(())
+}
+
+/// Run `program` and return what it wrote to standard output.
+///
+/// The exit status is checked like everywhere else, but some tools consider a
+/// failure a success: `notarytool submit --wait` exits 0 for a submission Apple
+/// rejected. Their verdict is in the output, so the caller gets the text and
+/// decides what it means.
+pub fn execute_command_capture_stdout<S, I, K, V>(
+    program: S,
+    args: I,
+    working_dir: Option<&Path>,
+    env: Option<&[(K, V)]>,
+) -> Result<String, CommandError>
+where
+    S: AsRef<OsStr>,
+    I: IntoIterator,
+    I::Item: AsRef<OsStr>,
+    K: AsRef<OsStr>,
+    V: AsRef<OsStr>,
+{
+    let program = program.as_ref();
+    let mut command = Command::new(program);
+    // Standard error stays inherited: progress and failure detail are useful to the
+    // user as they happen, and only the verdict is parsed.
+    command
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+
+    if let Some(dir) = working_dir {
+        command.current_dir(dir);
+    }
+
+    if let Some(env_vars) = env {
+        command.envs(env_vars.iter().map(|(k, v)| (k.as_ref(), v.as_ref())));
+    }
+
+    let output = command.output().map_err(|error| CommandError::Execute {
+        command: program.to_os_string(),
+        error,
+    })?;
+    check_status(Ok(output.status), program)?;
+
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// Determine the Flutter executable name based on the platform.
