@@ -468,3 +468,15 @@ compile both `.wxs` files with `candle -arch x64` (or `-arch arm64` on an ARM64 
 -sice:ICE60 -sice:ICE61` → `msiexec /a` (extraction check) / `/i /qn` (needs elevation) / `/x /qn`.
 
 WiX download: <https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip>.
+
+The download is checked against a pinned SHA-256 (`WIX_ARCHIVE_SHA256` in
+`crates/pacor-packaging-windows/src/msi/toolchain.rs`) before anything is unpacked, for the same
+reason as the NSIS archive: a release asset can be replaced by its owner at any time, and
+`candle.exe` and `light.exe` are then run on the building machine. To refresh the pin after an
+intentional upstream change:
+
+```bash
+cargo test -p pacor-packaging-windows -- --ignored the_pinned_wix_digest_matches_the_published_archive
+# or, without a checkout:
+curl -sL https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip | sha256sum
+```

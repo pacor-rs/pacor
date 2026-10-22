@@ -425,3 +425,13 @@ per-user 安装会额外引入两条硬约束，**本方案因只做 per-machine
 -sice:ICE60 -sice:ICE61` → `msiexec /a`（解包校验）/ `/i /qn`（需提权）/ `/x /qn`。
 
 WiX 下载地址：<https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip>。
+
+下载内容在解压前会与固定的 SHA-256（`crates/pacor-packaging-windows/src/msi/toolchain.rs` 中的
+`WIX_ARCHIVE_SHA256`）比对，理由与 NSIS 归档相同：发行版资产随时可能被其所有者替换，而
+`candle.exe`、`light.exe` 随后会在构建机上执行。上游有意变更后需要更新该固定值时：
+
+```bash
+cargo test -p pacor-packaging-windows -- --ignored the_pinned_wix_digest_matches_the_published_archive
+# 或者不检出仓库：
+curl -sL https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip | sha256sum
+```
