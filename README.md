@@ -131,6 +131,27 @@ mirror variables, and [docs/ANDROID.md](docs/ANDROID.md) for the APK signing
 configuration. `PACOR_OUTPUT_DIR` and `PACOR_BUILD_MODE` override the
 corresponding `[build]` keys.
 
+## macOS packages
+
+`pacor build --target macos` writes the installer image and the updater archive into
+the output directory, each with a `.sha1` next to it:
+
+```
+dist/MyApp-1.0.0+1-arm64.dmg
+dist/MyApp-1.0.0+1-arm64.app.tar.gz
+```
+
+The `.app` is signed inside out — nested frameworks and dylibs first, the bundle
+second — when `platforms.macos.codesign_identity` is set, the image is signed after
+it has been built, and `platforms.macos.notarize_credentials` submits that image to
+Apple and staples the ticket: the two steps that keep Gatekeeper quiet on a
+downloaded copy. `platforms.macos` also carries the bundle identifier, the minimum
+system version and the App Store category, which pacor writes into the built
+`Info.plist`, and `[app.i18n]` becomes one `.lproj` per locale.
+
+[`docs/MACOS.md`](docs/MACOS.md) documents the artifacts, the configuration keys, the
+signing and notarization flow, the cache layout and the failures that layout explains.
+
 ## Windows packages
 
 `pacor build --target windows` writes an NSIS installer and, unless
