@@ -65,7 +65,7 @@ pub(super) fn prepare_linuxdeploy_tool(tools_directory: &Path, arch: &Arch) -> R
         let data = download_file(&url)
             .with_context(|| format!("failed to download linuxdeploy from {url}"))?;
         verify_linuxdeploy(&data, arch, &url)?;
-        install_executable(&path, &data)?;
+        write_executable_file(&path, &data)?;
 
         info!(path = %path.display(), "linuxdeploy downloaded");
     }
@@ -89,32 +89,6 @@ fn verify_linuxdeploy(data: &[u8], arch: &Arch, url: &str) -> Result<()> {
     Err(anyhow::anyhow!(
         "{url} has SHA-256 {actual}, expected {expected}: the pinned release asset was replaced"
     ))
-}
-
-/// Move a verified download into the cache in one step.
-///
-/// `path.exists()` is the cache check, so a file written directly and left half-finished — a
-/// full disk, a killed process — would be used as the tool on every later run, and its failure
-/// would look like a broken linuxdeploy rather than an interrupted download. The temporary file
-/// is a sibling of the destination, so the rename cannot cross filesystems and the cache either
-/// holds the verified binary or nothing at all.
-fn install_executable(path: &Path, data: &[u8]) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("{} has no parent directory", path.display()))?;
-
-    let staged = tempfile::NamedTempFile::new_in(parent)
-        .with_context(|| format!("failed to create a temporary file in {}", parent.display()))?;
-    write_executable_file(staged.path(), data)?;
-    staged.persist(path).map_err(|error| {
-        anyhow::anyhow!(
-            "failed to move the downloaded tool into {}: {}",
-            path.display(),
-            error.error
-        )
-    })?;
-
-    Ok(())
 }
 
 /// Overwrite the AppImage magic bytes with zeroes.
@@ -255,22 +229,6 @@ mod tests {
         assert!(error.contains(&other), "{error}");
     }
 
-    /// The cache holds the verified bytes and nothing else: the temporary file the download was
-    /// written to must not survive next to it.
-    #[test]
-    fn a_verified_download_is_installed_without_leaving_staging_files() {
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("linuxdeploy-x86_64.AppImage");
-
-        install_executable(&path, b"binary").unwrap();
-
-        assert_eq!(fs::read(&path).unwrap(), b"binary");
-        let entries: Vec<_> = fs::read_dir(temp.path())
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name())
-            .collect();
-        assert_eq!(entries.len(), 1, "{entries:?}");
-    }
     /// Downloads the published binaries and checks them against the pins.
     ///
     /// Ignored because it needs the network; it is the check to run when refreshing the digests,

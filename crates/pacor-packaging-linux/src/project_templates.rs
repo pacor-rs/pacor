@@ -33,7 +33,7 @@ use anyhow::{Context, Result, bail};
 
 use pacor_core::tools::TEMPLATE_REF;
 use pacor_core::utils::downloader::download_file;
-use pacor_core::utils::fs::ensure_directory_exists;
+use pacor_core::utils::fs::{ensure_directory_exists, write_file_atomically};
 use pacor_core::utils::template::render_template;
 
 /// Suffix of the backups pacor creates.
@@ -182,7 +182,7 @@ impl TemplateApplier {
             let url = template_url(&self.format, &template.remote_filename);
             debug!("Downloading template {url}");
             let data = download_file(&url)?;
-            fs::write(&cached_path, &data)?;
+            write_file_atomically(&cached_path, &data)?;
             data
         };
 
