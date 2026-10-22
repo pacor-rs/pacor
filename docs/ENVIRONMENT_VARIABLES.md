@@ -6,6 +6,22 @@
 
 This document describes the environment variables the Pacor tool supports and how to use them.
 
+## Build environment variables
+
+### PACOR_OUTPUT_DIR
+
+**Purpose**: override `[build] output_dir`, the directory that receives the artifacts.
+
+**Format**: a path relative to the project root. It has to stay inside the project — an
+absolute path, a `..` component and `.` are rejected, because `pacor clean` removes the
+directory wholesale.
+
+### PACOR_BUILD_MODE
+
+**Purpose**: override `[build] flutter_build_mode`.
+
+**Format**: `release`, `debug` or `profile`.
+
 ## Downloader environment variables
 
 The downloader module reads GitHub mirrors from environment variables to improve download speed

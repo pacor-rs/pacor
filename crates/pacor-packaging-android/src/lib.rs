@@ -208,6 +208,16 @@ impl<'a> BundleBuilder for AndroidBuilder<'a> {
         Ok(())
     }
 
+    fn clean_build_directories(&self) -> &'static [&'static str] {
+        // Flutter writes every Gradle output below `build/app`; `build/` also
+        // holds the other platforms' trees.
+        &["build/app"]
+    }
+
+    fn artifact_suffixes(&self) -> &'static [&'static str] {
+        &[".apk", ".aab"]
+    }
+
     /// Returns the root path of the Flutter project.
     fn project_root(&self) -> &Path {
         &self.project_root

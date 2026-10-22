@@ -12,7 +12,7 @@ pub mod linux;
 pub mod macos;
 pub mod windows;
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -140,6 +140,13 @@ impl PacorConfig {
             }));
         }
 
+        if let Some(reason) = Self::output_dir_problem(&self.build.output_dir) {
+            return Err(Error::Configuration(ConfigurationError::ValidationFailed {
+                field: "build.output_dir".to_string(),
+                reason: format!("`{}` {reason}", self.build.output_dir),
+            }));
+        }
+
         self.validate_desktop_entry()?;
 
         Ok(())
@@ -182,8 +189,49 @@ impl PacorConfig {
         project_root()
     }
 
+    /// Why `output_dir` cannot be the artifact directory, if it cannot be.
+    ///
+    /// The directory is removed wholesale by `pacor clean`, so it has to stay
+    /// inside the project: an absolute path could point at the home directory,
+    /// `..` could leave the project, and `.` is the project itself.
+    fn output_dir_problem(output_dir: &str) -> Option<&'static str> {
+        if output_dir.trim().is_empty() {
+            return Some("must not be empty");
+        }
+
+        let path = Path::new(output_dir);
+        if path.is_absolute() {
+            return Some("must be relative to the project root");
+        }
+
+        let mut has_name = false;
+        for component in path.components() {
+            match component {
+                Component::Prefix(_) | Component::RootDir => {
+                    return Some("must be relative to the project root");
+                }
+                Component::ParentDir => return Some("must not contain `..`"),
+                Component::CurDir => {}
+                Component::Normal(_) => has_name = true,
+            }
+        }
+
+        if !has_name {
+            return Some("must not be the project root itself");
+        }
+
+        None
+    }
+
     /// Absolute output directory for produced artifacts.
     pub fn output_dir(&self) -> Result<PathBuf> {
+        if let Some(reason) = Self::output_dir_problem(&self.build.output_dir) {
+            return Err(Error::Configuration(ConfigurationError::ValidationFailed {
+                field: "build.output_dir".to_string(),
+                reason: format!("`{}` {reason}", self.build.output_dir),
+            }));
+        }
+
         Ok(self.project_root()?.join(&self.build.output_dir))
     }
 }
@@ -294,5 +342,71 @@ mod tests {
         assert!(config.platforms.windows.is_some());
         assert!(config.platforms.macos.is_some());
         assert!(config.platforms.android.is_some());
+    }
+
+    #[test]
+    fn an_absolute_output_directory_is_rejected() {
+        let config = config_with_output_dir("/tmp/pacor-artifacts");
+
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("build.output_dir"), "{error}");
+        assert!(error.contains("relative to the project root"), "{error}");
+    }
+
+    #[test]
+    fn an_output_directory_that_leaves_the_project_is_rejected() {
+        for output_dir in ["..", "../dist", "artifacts/../../dist"] {
+            let config = config_with_output_dir(output_dir);
+
+            let error = config.validate().unwrap_err().to_string();
+            assert!(
+                error.contains("must not contain `..`"),
+                "{output_dir}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_project_root_is_not_a_valid_output_directory() {
+        for output_dir in [".", "./", ""] {
+            let config = config_with_output_dir(output_dir);
+
+            let error = config.validate().unwrap_err().to_string();
+            assert!(error.contains("build.output_dir"), "{output_dir}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_plain_relative_output_directory_is_accepted() {
+        for output_dir in ["dist", "./dist", "artifacts/linux"] {
+            config_with_output_dir(output_dir)
+                .validate()
+                .unwrap_or_else(|error| panic!("{output_dir} must be accepted: {error}"));
+        }
+    }
+
+    #[test]
+    fn output_dir_refuses_an_escaping_path_before_resolving_the_project() {
+        let error = config_with_output_dir("../dist")
+            .output_dir()
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("must not contain `..`"), "{error}");
+    }
+
+    fn config_with_output_dir(output_dir: &str) -> PacorConfig {
+        let mut config: PacorConfig = toml::from_str(
+            r#"
+            [app]
+            default_locale = "en-US"
+            url = "https://example.com"
+            [app.i18n.en-US]
+            publisher = "p"
+            "#,
+        )
+        .expect("minimal config must parse");
+        config.build.output_dir = output_dir.to_string();
+        config
     }
 }

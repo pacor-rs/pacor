@@ -228,7 +228,8 @@ culture.wxl.tmpl               # 本地化模板，每个语言渲染一份
 
 ## 清理
 
-- `pacor clean`：删除输出目录、Flutter 构建产物与 `tmp/` 调试符号；
+- `pacor clean`：删除输出目录与 Flutter 构建产物（带 `--target` 时只删该目标的构建目录与产物）；
+  `tmp/` 里的调试符号由构建结束时的清理步骤删除，`--skip-cleanup` 可保留；
 - `pacor cache clean [--dry-run]`：删除 `%APPDATA%\pacor` 下的共享缓存（含 NSIS、WiX 与模板）。
 
 ## 常见问题

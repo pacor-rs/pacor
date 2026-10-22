@@ -256,6 +256,14 @@ impl<'a> BundleBuilder for WindowsBuilder<'a> {
         Ok(())
     }
 
+    fn clean_build_directories(&self) -> &'static [&'static str] {
+        &["build/windows"]
+    }
+
+    fn artifact_suffixes(&self) -> &'static [&'static str] {
+        &[".msi", ".exe", ".zip"]
+    }
+
     /// Returns reference to the project root directory
     fn project_root(&self) -> &Path {
         &self.project_root

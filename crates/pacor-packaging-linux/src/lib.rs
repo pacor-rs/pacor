@@ -137,6 +137,14 @@ impl<'a> BundleBuilder for LinuxBuilder<'a> {
         Ok(())
     }
 
+    fn clean_build_directories(&self) -> &'static [&'static str] {
+        &["build/linux"]
+    }
+
+    fn artifact_suffixes(&self) -> &'static [&'static str] {
+        &[".AppImage", ".deb", ".rpm"]
+    }
+
     fn validate(&self) -> Result<()> {
         let required_tools = ["flutter"];
         let pubspec_path = self.project_root.join("pubspec.yaml");

@@ -59,7 +59,7 @@ pacor build
 | `pacor init [--force]`               | Write the commented configuration template               |
 | `pacor build [--target OS] [--format FMT]...` | Build an installer                              |
 | `pacor android`                      | Alias for `pacor build --target android`                 |
-| `pacor clean [--target OS]`          | Remove the output directory and Flutter build artifacts  |
+| `pacor clean [--target OS]`          | Remove build artifacts (with `--target`, only that target's) |
 | `pacor cache clean [--dry-run]`      | Remove downloaded tools and templates from the cache     |
 | `pacor check [--target OS]`          | Validate the project, configuration and build tools      |
 | `pacor config [--full]`              | Print the effective configuration                        |

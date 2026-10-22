@@ -39,6 +39,20 @@ pub trait BundleBuilder {
     /// Clean up temporary files created while building.
     fn clean(&self) -> Result<()>;
 
+    /// Directories, relative to the project root, that a build of this target
+    /// writes and that `pacor clean --target` may remove.
+    ///
+    /// Only the target's own directory is listed: `build/` is shared by every
+    /// platform and is removed only when no target is given.
+    fn clean_build_directories(&self) -> &'static [&'static str];
+
+    /// File-name suffixes of the artifacts this target writes into the output
+    /// directory, including their checksum files.
+    ///
+    /// `pacor clean --target` uses them to remove only this target's artifacts
+    /// from a directory that may hold the artifacts of several targets.
+    fn artifact_suffixes(&self) -> &'static [&'static str];
+
     /// Root directory of the Flutter project.
     fn project_root(&self) -> &Path;
 

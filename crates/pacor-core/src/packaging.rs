@@ -14,6 +14,7 @@ use crate::error::{BuildError, ConfigurationError, Error, PlatformError, Validat
 use crate::platforms::BuildArtifact;
 use crate::utils::command::{CommandOutputMode, execute_flutter_build_command, find_command_path};
 use crate::utils::crypto::generate_sha1_checksum_file;
+use crate::utils::fs::clean_dir;
 
 /// Highest value Windows accepts for one version component.
 const VERSION_COMPONENT_MAX: u32 = u16::MAX as u32;
@@ -202,6 +203,50 @@ pub fn clean_directory_contents(directory: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Remove a project's artifact directory after checking where it points.
+///
+/// `build.output_dir` is validated as a relative path, and this is the second
+/// check: a `dist` symlink that resolves outside the project would otherwise be
+/// followed when the directory is removed. Refusing names both paths instead of
+/// deleting something the user did not mean to hand over.
+pub fn remove_output_directory(directory: &Path, project_root: &Path) -> Result<()> {
+    if !directory.exists() {
+        return Ok(());
+    }
+
+    let resolve = |path: &Path| -> Result<PathBuf> {
+        std::fs::canonicalize(path).map_err(|error| {
+            Error::Validation(ValidationError::FileValidation {
+                file: path.to_path_buf(),
+                reason: format!("failed to resolve the path: {error}"),
+            })
+        })
+    };
+
+    let root = resolve(project_root)?;
+    let target = resolve(directory)?;
+
+    if target == root || !target.starts_with(&root) {
+        return Err(Error::Validation(ValidationError::FileValidation {
+            file: directory.to_path_buf(),
+            reason: format!(
+                "refusing to remove it: {} resolves to {}, which is outside the project root {}",
+                directory.display(),
+                target.display(),
+                root.display()
+            ),
+        }));
+    }
+
+    // Remove the configured path, not the resolved one: when `dist` is a link
+    // inside the project, the link goes and the shared directory stays.
+    clean_dir(directory).map_err(|error| {
+        Error::Build(BuildError::Cleanup {
+            reason: format!("failed to remove {}: {error}", directory.display()),
+        })
+    })
+}
+
 /// Common pre-build validation: required tools, required files and a writable
 /// output directory.
 pub fn validate_build_environment(
@@ -262,6 +307,8 @@ pub fn require_existing_path(field: &str, path: &Option<PathBuf>) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
 
     /// `VIProductVersion` and MSI's `ProductVersion` both reject anything but
     /// four numeric components, and the Flutter default version is `1.0.0+1`.
@@ -328,5 +375,85 @@ mod tests {
             matches!(id.as_bytes()[20], b'8' | b'9' | b'A' | b'B'),
             "variant nibble: {id}"
         );
+    }
+
+    #[test]
+    fn an_output_directory_inside_the_project_is_removed() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        let output = root.join("dist");
+        fs::create_dir_all(&output).unwrap();
+        fs::write(output.join("app.deb"), "deb").unwrap();
+
+        remove_output_directory(&output, &root).unwrap();
+
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn an_output_directory_outside_the_project_is_refused() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        let outside = temp.path().join("home");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("keep.txt"), "keep").unwrap();
+
+        let error = remove_output_directory(&outside, &root)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("refusing to remove it"), "{error}");
+        assert!(outside.join("keep.txt").is_file(), "{error}");
+    }
+
+    #[test]
+    fn the_project_root_is_never_removed() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("pubspec.yaml"), "name: demo").unwrap();
+
+        let error = remove_output_directory(&root, &root)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("refusing to remove it"), "{error}");
+        assert!(root.join("pubspec.yaml").is_file(), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_output_directory_outside_the_project_is_refused() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        let outside = temp.path().join("home");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("keep.txt"), "keep").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("dist")).unwrap();
+
+        let error = remove_output_directory(&root.join("dist"), &root)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("refusing to remove it"), "{error}");
+        assert!(outside.join("keep.txt").is_file(), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_output_directory_inside_the_project_keeps_its_target() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        let shared = root.join("shared-output");
+        fs::create_dir_all(&shared).unwrap();
+        fs::write(shared.join("app.deb"), "deb").unwrap();
+        std::os::unix::fs::symlink(&shared, root.join("dist")).unwrap();
+
+        remove_output_directory(&root.join("dist"), &root).unwrap();
+
+        assert!(!root.join("dist").exists(), "the link must be removed");
+        assert!(shared.join("app.deb").is_file(), "the target must survive");
     }
 }
