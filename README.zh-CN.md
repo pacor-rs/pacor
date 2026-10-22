@@ -1,5 +1,5 @@
 <p align='center'>
-<img src='docs/pacor.svg' width='64' />
+<img src='docs/pacor.avif' width='64' />
 <br/>
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
 <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-2024-orange.svg" alt="Rust"></a>
