@@ -1026,3 +1026,35 @@ fn point_at_stub(fixture: &Fixture, key: &str) {
         "the fixture configuration must still configure `{key}`"
     );
 }
+
+/// A `build` that runs on its own — without `validate` — must create the output directory
+/// before checking that it is writable. Checking first made a first build fail with
+/// "directory does not exist", the state the creation step was about to fix.
+#[test]
+fn a_build_without_a_validate_still_creates_the_output_directory() {
+    serialised(|| {
+        temp_env::with_vars(ISOLATED_ENVIRONMENT, || {
+            let fixture = Fixture::new("formats = [\"apk\"]");
+            let config = fixture.config();
+            let builder =
+                AndroidBuilder::new(&config).expect("the fixture project must be readable");
+            let output = config
+                .output_dir()
+                .expect("the fixture configures an output dir");
+            assert!(
+                !output.exists(),
+                "the fixture must not have an output directory yet"
+            );
+
+            // The build fails later, on the APKs the stub Flutter never writes; what this test
+            // observes is that it got past the directory check.
+            let _ = builder.build(false, CommandOutputMode::None);
+
+            assert!(
+                output.is_dir(),
+                "{} must be created before it is checked",
+                output.display()
+            );
+        });
+    });
+}

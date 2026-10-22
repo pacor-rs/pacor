@@ -51,10 +51,7 @@ use pacor_core::{
     },
     error::ConfigurationError,
     platforms::BuildArtifact,
-    utils::{
-        command::CommandOutputMode,
-        fs::{clean_dir, ensure_directory_exists},
-    },
+    utils::{command::CommandOutputMode, fs::clean_dir},
 };
 
 pub use pacor_core::core::abi::TargetAbi;
@@ -158,12 +155,10 @@ impl<'a> BundleBuilder for AndroidBuilder<'a> {
         validate_formats(&self.android_config)?;
         validate_abis(&self.android_config)?;
 
-        // Ensure output directory exists and validate permissions
-        pacor_core::packaging::validate_directory_permissions(
-            &self.output_directory,
-            "Android build output",
-        )?;
-        ensure_directory_exists(&self.output_directory)?;
+        // Create the output directory before checking that it is writable. Checking first, as
+        // this did, made a `build` that runs without `validate` fail a first run with
+        // "directory does not exist" — the state the next line was about to fix.
+        pacor_core::packaging::prepare_output_directory(&self.output_directory)?;
 
         if skip_flutter_build {
             info!("Skipping Flutter app build as requested");
