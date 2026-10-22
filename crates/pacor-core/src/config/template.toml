@@ -124,6 +124,8 @@ build_portable = true
 enabled = true
 minimum_system_version = "10.14"
 category = "public.app-category.entertainment"
+# Both lay the installer window out with Finder automation, so setting either
+# makes pacor drop its `--sandbox-safe` create-dmg flag for that run.
 # dmg_background = "assets/dmg-background.png"
 # dmg_window_size = [500, 350]
 # codesign_identity = "Developer ID Application: ..."
