@@ -192,6 +192,7 @@ impl<'a> BundleBuilder for MacOSAppBuilder<'a> {
 
         // Localization rewrites the bundle, so it has to run before `codesign` seals it.
         localization::add_localization_resources(&app_bundle_path, self.app_config)?;
+        localization::write_bundle_metadata(&app_bundle_path, self.macos_config)?;
 
         let filename_base = pacor_core::packaging::artifact_base_name(
             self.flutter_project.name(),
