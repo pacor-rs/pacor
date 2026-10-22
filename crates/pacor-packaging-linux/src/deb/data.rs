@@ -153,7 +153,11 @@ fn install_icons(data_root: &Path, context: &DataContext<'_>) -> Result<()> {
     // The desktop entry names the icon after the executable, so the files have to
     // carry that same name: `package_name` is hyphenated for `dpkg`, and an icon it
     // points at does not exist.
-    install_icons_to_hicolor_dir(context.executable_name, &hicolor_dir, context.icons.values())?;
+    install_icons_to_hicolor_dir(
+        context.executable_name,
+        &hicolor_dir,
+        context.icons.values(),
+    )?;
 
     debug!(directory = %hicolor_dir.display(), "Icons installed");
     Ok(())
