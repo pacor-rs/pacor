@@ -175,7 +175,6 @@ pub fn ensure_directory_exists(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Recursively remove a directory if it exists.
 /// Total size in bytes of the regular files under `path`.
 ///
 /// Best effort: unreadable entries are skipped rather than failing the call,
@@ -205,6 +204,7 @@ pub fn directory_size(path: &Path) -> u64 {
     total
 }
 
+/// Recursively remove a directory if it exists.
 pub fn clean_dir(dir: &Path) -> Result<()> {
     if dir.exists() {
         fs::remove_dir_all(dir)?;
