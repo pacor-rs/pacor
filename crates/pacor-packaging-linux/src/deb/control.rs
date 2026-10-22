@@ -44,6 +44,12 @@ fn debian_architecture(arch: &Arch) -> &'static str {
 }
 
 /// Write `control`, the maintainer scripts and `md5sums` into `control_dir`.
+///
+/// The changelog is installed first: `Installed-Size` and `md5sums` both describe the data
+/// tree, and writing the changelog after them described a tree that was missing it. It used to
+/// be called by the builder once this function had returned, which left the package declaring
+/// one file fewer than it carried — `dpkg -V` never verified the changelog, and the space apt
+/// reserves for the installation was short by its compressed length.
 pub(super) fn write_control_members(
     control_dir: &Path,
     data_dir: &Path,
@@ -51,6 +57,7 @@ pub(super) fn write_control_members(
 ) -> Result<()> {
     ensure_directory_exists(control_dir)?;
 
+    install_changelog(data_dir, context.package_name, context.debian)?;
     generate_control_file(control_dir, data_dir, context)?;
     install_maintainer_scripts(control_dir, context.debian)?;
     write_md5sums(control_dir, data_dir)?;
@@ -200,11 +207,7 @@ fn install_maintainer_scripts(control_dir: &Path, debian: &DebianConfig) -> Resu
 }
 
 /// Copy the configured changelog into the package as `changelog.Debian.gz`.
-pub(super) fn install_changelog(
-    data_root: &Path,
-    package_name: &str,
-    debian: &DebianConfig,
-) -> Result<()> {
+fn install_changelog(data_root: &Path, package_name: &str, debian: &DebianConfig) -> Result<()> {
     let Some(changelog) = debian.changelog() else {
         return Ok(());
     };
@@ -278,6 +281,50 @@ mod tests {
     /// A continuation line at column 0 is read as a new field; dpkg then rejects the
     /// package for a malformed control file, which is what a `description` with newlines
     /// used to produce.
+    /// The changelog was installed after `Installed-Size` and `md5sums` were computed, so the
+    /// package declared one file fewer than it carried.
+    #[test]
+    fn the_changelog_is_counted_and_listed() {
+        let dir = TempDir::new().unwrap();
+        let control_dir = dir.path().join("control");
+        let data_dir = dir.path().join("data");
+        ensure_directory_exists(&control_dir).unwrap();
+        ensure_directory_exists(&data_dir).unwrap();
+        fs::write(data_dir.join("file.txt"), "content").unwrap();
+
+        let changelog = dir.path().join("changelog");
+        fs::write(&changelog, "demo (1.2.3) unstable; urgency=low\n").unwrap();
+        let debian = DebianConfig {
+            changelog: Some(changelog),
+            ..DebianConfig::default()
+        };
+
+        let app_config = app_config();
+        write_control_members(&control_dir, &data_dir, &context(&app_config, &debian)).unwrap();
+
+        let installed_size = calculate_installed_size_in_kb(&data_dir).unwrap();
+        let control = fs::read_to_string(control_dir.join("control")).unwrap();
+        assert!(
+            control.contains(&format!("Installed-Size: {installed_size}\n")),
+            "the size must cover the changelog as well:\n{control}"
+        );
+
+        // The listing uses the host separator, so the expectation is built the same way.
+        let installed_changelog = Path::new("usr")
+            .join("share")
+            .join("doc")
+            .join("demo")
+            .join("changelog.Debian.gz");
+        let installed_changelog = installed_changelog.to_string_lossy();
+
+        let md5sums = fs::read_to_string(control_dir.join("md5sums")).unwrap();
+        assert!(
+            md5sums
+                .lines()
+                .any(|line| line.ends_with(installed_changelog.as_ref())),
+            "every installed file belongs in md5sums:\n{md5sums}"
+        );
+    }
     #[test]
     fn a_multi_line_description_is_folded_into_one_field() {
         let dir = TempDir::new().unwrap();

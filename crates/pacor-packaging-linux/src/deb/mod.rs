@@ -200,12 +200,6 @@ impl<'a> DebianPackageBuilder<'a> {
             },
         )?;
 
-        control::install_changelog(
-            &data_root,
-            &package_name,
-            &self.config.debian_package_config,
-        )?;
-
         // How to build the members of a .deb:
         // http://www.tldp.org/HOWTO/Debian-Binary-Package-Building-HOWTO/x60.html#AEN66
         let debian_binary = staging_dir.join("debian-binary");
