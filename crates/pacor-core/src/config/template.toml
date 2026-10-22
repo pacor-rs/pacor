@@ -80,6 +80,13 @@ categories = [{ Main = "Utility" }]
 # priority = "optional"
 # depends = ["libgtk-3-0", "libblkid1", "liblzma5"]
 # changelog = "CHANGELOG.md"
+# Extra files to install next to the application: source -> target inside the
+# package. A leading "/" means the package root, so /usr/share/doc/demo/LICENSE
+# installs to usr/share/doc/demo/LICENSE. Targets are checked when the
+# configuration is loaded: ".." is rejected, because the payload is staged in a
+# temporary directory and a target that walks out of it would write to the
+# build machine instead of into the package.
+# files = { "LICENSE" = "/usr/share/doc/demo/LICENSE" }
 
 # ---------------------------------------------------------------------------
 # Windows: NSIS or MSI installer, and/or portable ZIP
