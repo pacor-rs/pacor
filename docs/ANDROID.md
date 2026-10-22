@@ -5,7 +5,8 @@
 # Pacor Android platform
 
 This document covers the artifacts, configuration, signing flow, known limitations and
-troubleshooting of `pacor build --target android` (`pacor android` is its alias). The
+troubleshooting of `pacor build --target android` (`pacor android` is its alias, and takes
+the same `--use-existing-flutter-build` and `--skip-cleanup` switches). The
 fully commented configuration template is
 [`crates/pacor-core/src/config/template.toml`](../crates/pacor-core/src/config/template.toml),
 and the GitHub mirror related environment variables are described in

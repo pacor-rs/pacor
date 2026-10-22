@@ -28,11 +28,12 @@ pub fn execute_cli_command(cli: Cli) -> Result<()> {
 
         Commands::Android {
             use_existing_flutter_build,
+            skip_cleanup,
         } => handlers::build(BuildRequest {
             target: Some(pacor_core::platforms::Platform::Android),
             formats: Vec::new(),
             use_existing_flutter_build,
-            skip_cleanup: false,
+            skip_cleanup,
             command_output: cli.command_output,
             config_path: cli.config_path,
         }),

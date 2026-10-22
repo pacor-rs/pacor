@@ -4,7 +4,8 @@
 
 # Pacor Android 平台说明
 
-本文档说明 `pacor build --target android`（`pacor android` 是其别名）的产物、配置、签名流程、
+本文档说明 `pacor build --target android`（`pacor android` 是其别名，接受同样的
+`--use-existing-flutter-build` 与 `--skip-cleanup` 开关）的产物、配置、签名流程、
 已知限制与常见排查方法。配置项的完整注释模板见
 [`crates/pacor-core/src/config/template.toml`](../crates/pacor-core/src/config/template.toml)，
 GitHub 镜像相关环境变量见 [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.zh-CN.md)。
