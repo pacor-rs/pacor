@@ -1,138 +1,161 @@
 name: "Delete Merged Branch"
 
 # A merged pull request leaves its branch behind: the work is on `main`, and the ref only
-# makes `git branch -r` noisy and hides the branches that are still open. Both ways in land
-# here — the `automerge` label and a person pressing "Merge" close the pull request the same
-# way — and so does a re-merge of the same branch later.
+# makes `git branch -r` noisy and hides the branches that are still open.
+#
+# The `pull_request` trigger covers what a person does: pressing "Merge" closes the pull
+# request, and the deletion runs seconds later. It does **not** cover a merge performed with
+# the repository's `GITHUB_TOKEN`: GitHub suppresses the events that token causes, so the
+# `automerge` job in `pr-check.yml` (which merges as `app/github-actions`) produces no
+# `pull_request.closed` event at all, and the workflow never starts. The sweep below is the
+# backstop for that case; `workflow_dispatch` runs the same sweep immediately.
 on:
   pull_request:
     types:
       - closed
+  schedule:
+    # Every 15 minutes. GitHub's scheduler can be late under load, so the worst case is
+    # closer to half an hour; `workflow_dispatch` is there for the impatient.
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
 
-# Two merges of the same branch (a reopened pull request, a stacked pair) would otherwise
-# race on the same ref. Never cancel: a delete is a single API call, and cutting it in half
-# tells nobody whether it happened.
+# Two runs must not race on the same ref: a reopened pull request, a stacked pair, or the
+# sweep overtaking an event run. Never cancel: a delete is a single API call, and cutting
+# it in half tells nobody whether it happened.
 concurrency:
-  group: delete-merged-branch-${{ github.event.pull_request.head.ref }}
+  group: delete-merged-branch-${{ github.event.pull_request.head.ref || 'sweep' }}
   cancel-in-progress: false
 
 env:
   # `gh` needs to know which repository to talk to; there is no checkout in this job.
   GH_REPO: ${{ github.repository }}
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
   delete-branch:
-    name: "Delete ${{ github.event.pull_request.head.ref }}"
-    # Only a *merged* pull request means the work is safe on `main`. One from a fork is
-    # skipped: the branch lives in someone else's repository, and this token cannot touch it.
+    name: "Delete merged branches"
+    # An event run is only interesting when the pull request was merged and its branch is in
+    # this repository; a fork's branch lives elsewhere and this token cannot touch it.
     if: >-
-      github.event.pull_request.merged == true
-      && github.event.pull_request.head.repo.full_name == github.repository
+      github.event_name != 'pull_request'
+      || (github.event.pull_request.merged == true
+          && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
       contents: write
       pull-requests: read
     steps:
-      # A branch can be merged and still be the base of the next pull request, or be one of
-      # the names this repository keeps on purpose. Neither is a leftover.
-      - name: Decide whether the branch is a leftover
-        id: guard
+      # The event payload names one branch; the sweep starts from the merged pull requests
+      # whose head is still a live ref. Both end up in `branches.tsv` as
+      # `<number>\t<branch>`, which is the only thing the next step knows about.
+      - name: Collect the merged branches
+        id: collect
         env:
-          BRANCH: ${{ github.event.pull_request.head.ref }}
-        run: |
-          set -euo pipefail
-
-          long_lived=(main master develop)
-          for kept in "${long_lived[@]}"; do
-            if [[ "${BRANCH}" == "${kept}" ]]; then
-              echo "::notice::${BRANCH} is a long-lived branch; keeping it"
-              echo "delete=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          done
-
-          case "${BRANCH}" in
-            release/*|release-*)
-              echo "::notice::${BRANCH} looks like a release branch; keeping it"
-              echo "delete=false" >> "$GITHUB_OUTPUT"
-              exit 0
-              ;;
-          esac
-
-          echo "delete=true" >> "$GITHUB_OUTPUT"
-
-      # Deleting the head of a still-open pull request would close it without a decision,
-      # which is exactly what a stacked pair of pull requests looks like.
-      - name: Check that no open pull request still uses it
-        id: busy
-        if: steps.guard.outputs.delete == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BRANCH: ${{ github.event.pull_request.head.ref }}
-        run: |
-          set -euo pipefail
-
-          open=$(gh pr list --head "${BRANCH}" --state open --json number --jq 'length')
-          if [[ "${open}" != "0" ]]; then
-            echo "::notice::${open} open pull request(s) still use ${BRANCH}; keeping it"
-            echo "delete=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "delete=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Delete the branch
-        id: deletion
-        if: steps.guard.outputs.delete == 'true' && steps.busy.outputs.delete == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BRANCH: ${{ github.event.pull_request.head.ref }}
-        run: |
-          set -euo pipefail
-
-          # The repository can be set to delete head branches itself; then this job is a
-          # second opinion rather than the mechanism, and finding the ref gone is success.
-          if ! gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${BRANCH}" >/dev/null 2>&1; then
-            echo "::notice::${BRANCH} is already gone (deleted by hand or by the repository setting)"
-            echo "deleted=already" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BRANCH}"
-          echo "deleted ${BRANCH}"
-          echo "deleted=yes" >> "$GITHUB_OUTPUT"
-
-      - name: Record what happened
-        if: always()
-        env:
-          BRANCH: ${{ github.event.pull_request.head.ref }}
+          EVENT: ${{ github.event_name }}
           NUMBER: ${{ github.event.pull_request.number }}
-          GUARD: ${{ steps.guard.outputs.delete }}
-          BUSY: ${{ steps.busy.outputs.delete }}
-          DELETION: ${{ steps.deletion.outputs.deleted }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
+          set -euo pipefail
+
+          branches="${RUNNER_TEMP}/merged-branches.tsv"
+          : > "${branches}"
+
+          if [[ "${EVENT}" == "pull_request" ]]; then
+            printf '%s\t%s\n' "${NUMBER}" "${BRANCH}" >> "${branches}"
+          else
+            # `isCrossRepository` tells a fork apart without a second request.
+            gh pr list --state merged --limit 200 \
+              --json number,headRefName,isCrossRepository \
+              --jq '.[] | select(.isCrossRepository == false) | [.number, .headRefName] | @tsv' \
+              > "${RUNNER_TEMP}/merged.tsv"
+
+            # One listing instead of one request per pull request: the sweep runs 96 times a
+            # day, and a repository token allows a thousand requests an hour.
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/git/matching-refs/heads/" \
+              --jq '.[].ref' > "${RUNNER_TEMP}/refs.txt"
+
+            # FD 3, not stdin: a command inside the loop that reads standard input would
+            # swallow the rest of the list, and the loop would stop after one branch.
+            while IFS=$'\t' read -r -u 3 number branch; do
+              [[ -n "${branch}" ]] || continue
+              # A merged pull request whose branch is already gone is the normal case after
+              # the first sweep; matching against the listing keeps the loop to real leftovers.
+              if grep -qxF "refs/heads/${branch}" "${RUNNER_TEMP}/refs.txt"; then
+                printf '%s\t%s\n' "${number}" "${branch}" >> "${branches}"
+              fi
+            done 3< "${RUNNER_TEMP}/merged.tsv"
+          fi
+
+          echo "count=$(wc -l < "${branches}")" >> "$GITHUB_OUTPUT"
+
+      - name: Delete the branches
+        env:
+          CONSIDERED: ${{ steps.collect.outputs.count }}
+        run: |
+          set -euo pipefail
+
+          branches="${RUNNER_TEMP}/merged-branches.tsv"
+          long_lived=(main master develop dev backup)
+          deleted=0
+          kept=0
+          gone=0
+
+          # FD 3 for the same reason: `gh` must not consume the list it is walking.
+          while IFS=$'\t' read -r -u 3 number branch; do
+            [[ -n "${branch:-}" ]] || continue
+
+            for kept_name in "${long_lived[@]}"; do
+              if [[ "${branch}" == "${kept_name}" ]]; then
+                echo "::notice::#${number} ${branch} is a long-lived branch; keeping it"
+                kept=$((kept + 1))
+                continue 2
+              fi
+            done
+
+            case "${branch}" in
+              release/*|release-*)
+                echo "::notice::#${number} ${branch} looks like a release branch; keeping it"
+                kept=$((kept + 1))
+                continue
+                ;;
+            esac
+
+            # Deleting the head of a still-open pull request would close it without a
+            # decision, which is exactly what a stacked pair of pull requests looks like.
+            open=$(gh pr list --head "${branch}" --state open --json number --jq 'length')
+            if [[ "${open}" != "0" ]]; then
+              echo "::notice::${open} open pull request(s) still use ${branch}; keeping it"
+              kept=$((kept + 1))
+              continue
+            fi
+
+            if ! gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${branch}" \
+              2>"${RUNNER_TEMP}/delete.err"; then
+              # A race with the event run (or the repository's own delete setting) loses the
+              # DELETE; if the ref is gone, that is the outcome this job wanted anyway.
+              if gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch}" >/dev/null 2>&1; then
+                cat "${RUNNER_TEMP}/delete.err" >&2
+                exit 1
+              fi
+              echo "::notice::${branch} was already deleted"
+              gone=$((gone + 1))
+              continue
+            fi
+
+            echo "deleted ${branch}"
+            deleted=$((deleted + 1))
+          done 3< "${branches}"
+
           {
             echo "## 🧹 Merged branch cleanup"
             echo ""
             echo "| | |"
             echo "| --- | --- |"
-            echo "| Pull request | #${NUMBER} |"
-            echo "| Branch | \`${BRANCH}\` |"
-            echo "| Outcome | $(
-              if [[ "${GUARD}" == "false" ]]; then
-                echo "kept (long-lived branch)"
-              elif [[ "${BUSY}" == "false" ]]; then
-                echo "kept (another open pull request uses it)"
-              elif [[ "${DELETION}" == "already" ]]; then
-                echo "already gone"
-              else
-                echo "deleted"
-              fi
-            ) |"
+            echo "| Considered | ${CONSIDERED} |"
+            echo "| Deleted | ${deleted} |"
+            echo "| Already gone | ${gone} |"
+            echo "| Kept | ${kept} |"
             echo ""
-            if [[ "${GUARD}" == "false" || "${BUSY}" == "false" ]]; then
-              echo "Nothing was deleted; the commits are on \`main\` either way."
-            else
-              echo "The commits are on \`main\`; the branch ref is no longer in the repository."
-            fi
+            echo 'Every kept branch has its reason in the step log; the commits are on `main` either way.'
           } >> "$GITHUB_STEP_SUMMARY"
