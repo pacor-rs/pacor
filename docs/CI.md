@@ -13,13 +13,13 @@ because nothing happened" has to say so out loud.**
 
 | File | Trigger | What it does |
 | ---- | ---- | ---- |
-| `pr-check.yml` | PR → `main` (`crates/**`, `Cargo.toml`, `Cargo.lock`, `.cargo/**`, `.github/**`, `docs/**`, `*.md`) | `fmt` / `clippy` / `test` / release build on three platforms, a release-profile clippy pass, `cargo check` for four cross targets, actionlint, the labelled auto-merge, and the branch cleanup that merge calls |
+| `pr-check.yml` | PR → `main` (`crates/**`, `Cargo.toml`, `Cargo.lock`, `.cargo/**`, `.github/**`, `docs/**`, `*.md`) | `fmt` / `clippy` / `test` / release build on three platforms, a release-profile clippy pass, `cargo check` for four cross targets, actionlint, and the labelled auto-merge with a token whose merges the branch cleanup can see |
 | `build-binaries.yml` | called by `publish.yml` and `nightly.yml` via `workflow_call` | release binaries for six platforms: build, optional UPX, smoke test, package, `.sha256`, upload artifact |
 | `publish.yml` | manual dispatch: a version bump and channel, or an existing `tag` to re-publish | bump the version on a temporary `release` branch → check it → call `build-binaries` → create a draft release at the release branch head, upload, publish → fast-forward `main` → delete the branch |
 | `nightly.yml` | every day at 04:00 UTC, or manual dispatch | build `main`, replace the `nightly` pre-release wholesale |
 | `warm-cache.yml` | Cargo file changes on `main`, Monday 05:00 UTC, manual dispatch | write the cargo registry and target caches ahead of time |
 | `cleanup-old-caches.yml` | Monday 00:00 UTC, or manual dispatch (`dry_run`) | keep only the newest entry of each cache family |
-| `delete-merged-branch.yml` | a merged pull request closes, the auto-merge job calls it, or manual dispatch | delete the head branch of the merged pull request unless it is long-lived, from a fork, or still used by an open pull request |
+| `delete-merged-branch.yml` | a merged pull request closes | delete the head branch of the merged pull request unless it is long-lived, from a fork, or still used by an open pull request |
 
 ## Releasing
 
@@ -89,12 +89,24 @@ branch when:
 - another open pull request still uses it as its head — a stacked pair looks exactly like
   that, and deleting the ref would close the child pull request without a decision.
 
-Two ways in, one implementation. `pull_request.closed` covers a merge made by a person,
-and the deletion runs seconds later. A merge performed with the repository's
-`GITHUB_TOKEN` produces no event at all: GitHub does not start workflows for the events that
-token causes, which is why #17 and #18 were merged with no cleanup run, and why
-`pr-check`'s `auto-merge` job calls this workflow directly once it has merged. A manual
-dispatch takes a pull request number for the one-off branch left by an older merge.
+The event is the only trigger. There is no schedule and no manual entry point: deleting a
+branch by hand is `git push origin --delete <branch>`, and a workflow input for the branch
+name would only be a slower way to run that command.
+
+That the event exists at all is the point. GitHub does not start a workflow for the events
+`GITHUB_TOKEN` causes, so a merge made with the default token emits no `pull_request.closed`
+and no cleanup can run — #17 and #18 were merged that way and kept their branches. `automerge`
+therefore merges with a token of its own, and the repository needs an `AUTOMERGE_TOKEN`
+secret:
+
+- a fine-grained personal access token for this repository with **Contents**, **Pull
+  requests** and **Workflows** set to *read and write* (the last one is what lets the merge
+  include a change to `.github/workflows/`);
+- stored with `gh secret set AUTOMERGE_TOKEN --body <token>`.
+
+A fine-grained token expires after at most a year, so it needs rotating; the merge is
+attributed to its owner. Without the secret, a pull request labelled `automerge` fails its
+`Auto Merge` job with a message naming the missing secret rather than merging quietly.
 
 A ref that is already gone counts as success: with the repository's own "Automatically
 delete head branches" setting enabled, this workflow is a second opinion rather than the

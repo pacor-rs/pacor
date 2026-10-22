@@ -12,13 +12,13 @@
 
 | 文件 | 触发 | 作用 |
 | ---- | ---- | ---- |
-| `pr-check.yml` | PR → `main`（`crates/**`、`Cargo.toml`、`Cargo.lock`、`.cargo/**`、`.github/**`、`docs/**`、`*.md`） | 三平台的 fmt / clippy / test / release 构建，release profile 的 clippy，四个交叉目标的 `cargo check`，actionlint，打了标签的自动合并，以及这次合并随后调用的分支清理 |
+| `pr-check.yml` | PR → `main`（`crates/**`、`Cargo.toml`、`Cargo.lock`、`.cargo/**`、`.github/**`、`docs/**`、`*.md`） | 三平台的 fmt / clippy / test / release 构建，release profile 的 clippy，四个交叉目标的 `cargo check`，actionlint，以及用自有 token 完成、其合并事件能被分支清理看到的那次自动合并 |
 | `build-binaries.yml` | 被 `publish.yml` 与 `nightly.yml` 以 `workflow_call` 调用 | 六个平台的 release 二进制：构建、可选 UPX、冒烟测试、打包、`.sha256`、上传 artifact |
 | `publish.yml` | 手动 dispatch：版本提升方式与通道，或填 `tag` 重发已有版本 | 在临时 `release` 分支上提升版本 → 检查该分支 → 调 `build-binaries` → 在 `release` 分支 head 上建草稿 release、上传、公开 → 快进 `main` → 删除分支 |
 | `nightly.yml` | 每天 04:00 UTC，或手动 dispatch | 构建 `main`，整体替换 `nightly` 预发布 |
 | `warm-cache.yml` | `main` 上的 Cargo 文件变更、每周一 05:00 UTC、手动 dispatch | 提前把 cargo registry 与 target 缓存写好 |
 | `cleanup-old-caches.yml` | 每周一 00:00 UTC，或手动 dispatch（可 `dry_run`） | 每个缓存族只保留最新一条 |
-| `delete-merged-branch.yml` | 已合并的 PR 被关闭、自动合并作业调用它、或手动 dispatch | 删除合并后遗留的头分支；长期分支、来自 fork 的分支、以及仍被其它未合并 PR 使用的分支除外 |
+| `delete-merged-branch.yml` | 已合并的 PR 被关闭 | 删除合并后遗留的头分支；长期分支、来自 fork 的分支、以及仍被其它未合并 PR 使用的分支除外 |
 
 ## 发版
 
@@ -73,11 +73,22 @@ PR 被关闭**且已合并**时，`delete-merged-branch.yml` 会删除它的头�
 - 还有其它未合并的 PR 以它为头分支——堆叠 PR 正是这种形状，删掉 ref 会让子 PR 未经决定
   就被关闭。
 
-入口有两个，实现只有一份。人工点"Merge"时 `pull_request.closed` 触发，几秒内就删完；
-**用仓库 `GITHUB_TOKEN` 完成的合并根本不产生事件**——GitHub 不会为该 token 引起的事件启动
-工作流。所以 #17、#18 合并时没有任何清理运行，也正是 `pr-check` 的 `auto-merge` 作业在合并
-完成后直接调用这个工作流的原因。手动 dispatch 需要填 PR 编号，用于清理历史上遗留、或某次
-运行失败留下的分支。
+触发方式只有事件一种：没有定时任务，也没有手动入口。手工删分支就是
+`git push origin --delete <branch>`，给工作流加一个填分支名的输入框只会让这条命令更慢。
+
+事件能存在才是关键。**GitHub 不会为 `GITHUB_TOKEN` 引起的事件启动工作流**，所以用默认 token
+完成的合并根本不产生 `pull_request.closed`，清理也就无从运行——#17、#18 正是这样合进来
+的，分支一直留着。因此 `automerge` 改为用属于自己的 token 合并，仓库需要配置
+`AUTOMERGE_TOKEN`：
+
+- 为本仓库创建的 fine-grained personal access token，**Contents**、**Pull requests**、
+  **Workflows** 三项都设为 *read and write*（最后一项用于合并改动了
+  `.github/workflows/` 的 PR）；
+- 用 `gh secret set AUTOMERGE_TOKEN --body <token>` 存进仓库。
+
+fine-grained token 最长一年就会过期，需要提前轮换；合并记录会记在 token 所有者名下。没有这个
+secret 时，打了 `automerge` 标签的 PR 会在 `Auto Merge` 作业里直接失败并指出缺的是哪个 secret，
+而不是悄悄不合并。
 
 ref 本来就不存在算成功：如果仓库开启了"自动删除头分支"设置，这个工作流只是第二道保险而
 已。每次运行都会把结果写进 job summary，被保留下来的分支旁边就写着原因。
