@@ -120,15 +120,29 @@ dtolnay/rust-toolchain):
 
 ```
 <os>-cargo-registry-<cachekey>-<hash(Cargo.lock)>
-<os>-rust-debug-<target>-<cachekey>-<hash(Cargo.lock)>
-<os>-rust-release-<target>-<cachekey>-<hash(Cargo.lock)>
+<os>-rust-debug-v<N>-<target>-<cachekey>-<hash(Cargo.lock)>
+<os>-rust-release-v<N>-<target>-<cachekey>-<hash(Cargo.lock)>
 ```
 
 Three families, and the target triple is in the key of every one of them — the host jobs
 included, because `pr-check` passes `--target` explicitly even where it names the machine it
-is running on. `target/<triple>/…` is a path `warm-cache.yml` can fill in for another
-platform's job; `target/debug` could only ever be written by the very job that would have
-read it.
+is running on.
+
+`<N>` is the revision of the cached *paths*, not a run counter, and it is currently `4`.
+A cache entry cannot be overwritten, so widening or narrowing the path list without a new
+key leaves the old entry in place and the change silently does nothing: the restore keeps
+finding the previous generation and the new files are never saved. Bump it in every
+workflow that touches the family in the same commit.
+
+Each entry carries two directories, not one. With `--target`, cargo writes the target
+artifacts under `target/<triple>/…` but the build scripts and proc macros — compiled for the
+host, which is why most of a cross entry is host artifacts — under the untripled
+`target/debug` and `target/release`. Caching only the tripled half left about
+thirty units to be rebuilt in every job of every run: a cache hit that still compiled
+`libc`, `syn`, `cc` and `ring` and took the same two minutes it would have taken cold.
+Both halves are in every entry, including the cross ones, even though their untripled copy
+is the same on all four Linux-hosted targets: the duplication is a few tens of megabytes and
+the alternative is a second restore step per job.
 
 That `--target` is what makes one writer possible, and there has to be exactly one: a cache
 written by a pull request is scoped to that pull request's merge ref, so the next pull
@@ -136,7 +150,7 @@ request reports `Cache not found` for a key that was saved minutes earlier by a 
 same `Cargo.lock` and the same toolchain. Every job in `pr-check` is therefore a reader
 (`actions/cache/restore`), and the writing happens on `main`: `warm-cache.yml` builds the
 host debug and release entries for all three platforms plus the four debug entries that
-`cross-check` reads, and `build-binaries` writes `rust-release-<target>` on every nightly and
+`cross-check` reads, and `build-binaries` writes `rust-release-v<N>-<target>` on every nightly and
 every release — also from `main`.
 
 A few rules, each of which was written down after being learned the hard way:
@@ -148,6 +162,12 @@ A few rules, each of which was written down after being learned the hard way:
   target cache hit also means `cargo fetch` need not touch the network.
 - **`CARGO_INCREMENTAL=0`.** Incremental data is not part of the cached paths; leaving it on
   only makes the restored directory bigger and prints a "could not be used" warning.
+- **No `#` comments inside a `path: |` block.** Every line of that block is a path, comments
+  included, and the path list is part of the cache *version*: an entry saved by a workflow
+  whose list contains a comment is a different version from the one a workflow without it
+  looks up, and the lookup reports `Cache not found` for a key that exists — which is how
+  the host half of the cache above was silently ignored for a day. Comments go above the
+  `path:` key.
 - **A pull request must never be the writer.** Its cache lives under `refs/pull/<n>/merge`:
   no other pull request can restore it, and it is useless the moment the branch is deleted.
   `warm-cache.yml` is a `push` to `main` for exactly this reason, and its keys are

@@ -104,13 +104,23 @@ jobs:
       - name: Cache debug build
         uses: actions/cache@v5
         with:
+          # Kept outside `path` below: a `#` line inside the block is a literal path, and
+          # it takes part in the cache version hash — a comment there makes the entry
+          # unmatchable from a workflow that writes the paths without it.
+          # Cargo stores build-script and proc-macro artifacts, which are built for the
+          # host rather than the target, in the untripled directories — even when
+          # `--target` names the host. Without these three lines every job rebuilds
+          # roughly thirty of them from scratch, cache hit or not.
           path: |
             target/${{ matrix.target }}/debug/.fingerprint
             target/${{ matrix.target }}/debug/deps
             target/${{ matrix.target }}/debug/build
-          key: ${{ runner.os }}-rust-debug-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+            target/debug/.fingerprint
+            target/debug/deps
+            target/debug/build
+          key: ${{ runner.os }}-rust-debug-v4-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-rust-debug-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+            ${{ runner.os }}-rust-debug-v4-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-
 
       - name: Cache release build
         uses: actions/cache@v5
@@ -119,9 +129,12 @@ jobs:
             target/${{ matrix.target }}/release/.fingerprint
             target/${{ matrix.target }}/release/deps
             target/${{ matrix.target }}/release/build
-          key: ${{ runner.os }}-rust-release-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+            target/release/.fingerprint
+            target/release/deps
+            target/release/build
+          key: ${{ runner.os }}-rust-release-v4-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-rust-release-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+            ${{ runner.os }}-rust-release-v4-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-
 
       - name: Fetch dependencies
         run: cargo fetch --locked
@@ -187,9 +200,16 @@ jobs:
             target/${{ matrix.target }}/debug/.fingerprint
             target/${{ matrix.target }}/debug/deps
             target/${{ matrix.target }}/debug/build
-          key: ${{ runner.os }}-rust-debug-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+            # Cargo stores build-script and proc-macro artifacts, which are built for the
+            # host rather than the target, in the untripled directories — even when
+            # `--target` names the host. Without these three lines every job rebuilds
+            # roughly thirty of them from scratch, cache hit or not.
+            target/debug/.fingerprint
+            target/debug/deps
+            target/debug/build
+          key: ${{ runner.os }}-rust-debug-v4-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-rust-debug-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+            ${{ runner.os }}-rust-debug-v4-${{ matrix.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-
 
       # `ring`, the crypto backend of rustls, compiles a little C: this is the only cross
       # target here that does not already have a compiler for it on PATH.

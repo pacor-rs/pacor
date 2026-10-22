@@ -108,9 +108,12 @@ jobs:
             target/${{ matrix.platform.target }}/release/.fingerprint
             target/${{ matrix.platform.target }}/release/deps
             target/${{ matrix.platform.target }}/release/build
-          key: ${{ runner.os }}-rust-release-${{ matrix.platform.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+            target/release/.fingerprint
+            target/release/deps
+            target/release/build
+          key: ${{ runner.os }}-rust-release-v4-${{ matrix.platform.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-rust-release-${{ matrix.platform.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+            ${{ runner.os }}-rust-release-v4-${{ matrix.platform.target }}-${{ steps.rust-toolchain.outputs.cachekey }}-
 
       # The only target that needs a linker this runner does not ship.
       - name: Install the ARM64 linker

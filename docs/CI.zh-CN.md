@@ -99,21 +99,31 @@ ref 本来就不存在算成功：如果仓库开启了"自动删除头分支"�
 
 ```
 <os>-cargo-registry-<cachekey>-<hash(Cargo.lock)>
-<os>-rust-debug-<target>-<cachekey>-<hash(Cargo.lock)>
-<os>-rust-release-<target>-<cachekey>-<hash(Cargo.lock)>
+<os>-rust-debug-v<N>-<target>-<cachekey>-<hash(Cargo.lock)>
+<os>-rust-release-v<N>-<target>-<cachekey>-<hash(Cargo.lock)>
 ```
 
 三族，而且是**每一族都带 target**——宿主作业也一样，因为 `pr-check` 里每个作业都显式
-传 `--target`，哪怕它指的就是自己所在的那台机器。`target/<triple>/…` 是
-`warm-cache.yml` 能为别的平台的作业填好的路径；而 `target/debug` 只有**跑它的那个
-作业自己**才能写。
+传 `--target`，哪怕它指的就是自己所在的那台机器。
+
+`<N>` 是**缓存路径的版本号**，不是运行次数，当前是 `4`。缓存条目无法覆盖，所以改宽或
+改窄路径却不换键，旧条目会一直占着位置、改动悄无声息地不生效：恢复永远命中上一代，
+新文件一次也存不进去。动了这一族路径的工作流必须在同一个提交里一起升版本号。
+
+每个条目装的是两个目录，而不是一个。带 `--target` 时，cargo 把目标产物放在
+`target/<triple>/…`，而把为宿主编译的 build script 与 proc macro 放在**不带 triple** 的
+`target/debug` 和 `target/release` 下——交叉编译条目里大半体积都是它们。只缓存带
+triple 的那一半，会留下大约三十个单元在每次运行的每个作业里重编：缓存明明命中，却照样
+`Compiling libc`、`syn`、`cc`、`ring`，耗时和冷编译的两分钟一模一样。两半都进了每个
+条目，交叉条目里也不例外——四个跑在 Linux 上的 target 共享同一份宿主副本，为此多花的
+是几十 MB，换来的是不必给每个作业加一次额外的恢复步骤。
 
 正因如此写方只能有一个，也必须只有一个：PR 里写出的缓存属于该 PR 的 merge ref，
 隔壁的 PR 会对着同一个 `Cargo.lock`、同一个工具链、几分钟前刚存下的键报
 `Cache not found`。所以 `pr-check` 的每个作业都是读者（`actions/cache/restore`），
 写发生在 `main` 上：`warm-cache.yml` 为三个平台构建宿主 debug/release 条目，外加
 `cross-check` 要读的那四个 debug 条目；`build-binaries` 在每次 nightly 与发版时写
-`rust-release-<target>`——同样在 `main` 上。
+`rust-release-v<N>-<target>`——同样在 `main` 上。
 
 几条规则，都是踩过才写下来的：
 
@@ -123,6 +133,10 @@ ref 本来就不存在算成功：如果仓库开启了"自动删除头分支"�
   走网络。
 - **`CARGO_INCREMENTAL=0`**。增量数据不在缓存路径里，开着只会让恢复出来的目录更大，
   并在恢复后打印一条 "could not be used" 警告。
+- **`path: |` 里不要写 `#` 注释**。那一块的每一行都是路径，注释也算，而路径列表本身是
+  缓存**版本**的一部分：带注释保存的条目与不带注释查询的条目属于不同版本，于是明明存在
+  的键被报成 `Cache not found`——上面说的宿主那一半就是这样被静默忽略了整整一天。
+  注释写在 `path:` 上方。
 - **写方绝不能是 PR**。它的缓存落在 `refs/pull/<n>/merge` 之下：别的 PR 读不到，
   分支一删就作废。`warm-cache.yml` 因此由 `push` 到 `main` 触发，且它的键与
   PR 作业请求的键逐字节一致。

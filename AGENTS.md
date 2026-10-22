@@ -56,8 +56,10 @@ Some of these are not ceremony:
 - **Every CI job names its target explicitly**, the host ones included
   (`cargo test --target x86_64-unknown-linux-gnu`). That is not about correctness — the
   command above builds the same thing — but about caches: `target/<triple>/…` is a path
-  one workflow can fill in for another's job, while `target/debug` is only reachable by the
-  job that runs it, and a cache written by a pull request is invisible to the next one.
+  one workflow can fill in for another's job, and a cache written by a pull request is
+  invisible to the next one. The host half of the artifacts still lands in `target/debug`
+  and `target/release` (build scripts and proc macros are built for the host even under
+  `--target`), so every cache entry carries both halves.
 - There is no `rustfmt.toml`; the default configuration (100 columns) applies. Do not
   re-wrap code by hand for looks.
 - Do not habitually run a full `cargo build --release` locally: the release profile is
