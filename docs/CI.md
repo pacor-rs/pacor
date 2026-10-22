@@ -44,9 +44,11 @@ because nothing happened" has to say so out loud.**
 5. The release is created **as a draft**, the assets are uploaded, and only then is it
    published. The downloads list in its notes is rendered **from the assets that actually
    exist**, with their measured sizes, so it cannot drift from the upload.
-6. A pre-release channel additionally deletes the previous pre-releases: the updater only
-   ever sees the newest one, and older ones on the page are invitations to install the wrong
-   thing. Their tags stay, so the history is still reproducible.
+6. A pre-release channel additionally deletes the pre-releases **older than the one being
+   published**: the updater only ever sees the newest one, and older versions on the page are
+   invitations to install the wrong thing. A newer pre-release is left alone, and so is
+   `nightly`; a re-publish deletes nothing at all. Their tags stay, so the history is still
+   reproducible.
 7. `merge-back` fast-forwards `main` onto the bump commit — **only** after the release is
    public, and only if `main` has not moved in the meantime (a fast-forward that fails
    means someone merged while the release was building). It does not create the tag:
@@ -59,8 +61,10 @@ because nothing happened" has to say so out loud.**
    the `nightly` release and tag: people on the nightly are one command away from stable.
 
 **Re-publishing a tag** (`tag` filled in) rebuilds from that tag's tree, replaces the assets
-with `--clobber` and refreshes the notes — no bump, no merge-back, no cleanup. That is the
-way out of a broken asset.
+with `--clobber` and refreshes the notes — no bump, no merge-back, no cleanup, no pruning of
+other pre-releases, and no claim on the "Latest" badge (it keeps whatever release holds it).
+That is the way out of a broken asset, and the reason it stays this narrow is that the tag
+being re-published is usually not the newest one.
 
 **Why dispatch and not a tag push**: the tag is now *produced* by this workflow, so a
 `push: tags: v*` trigger would re-enter itself at the merge-back step.

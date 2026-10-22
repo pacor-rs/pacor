@@ -368,10 +368,16 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s\n' "${CHANGELOG}" > notes.md
+          # `--latest` marks the release as the newest in the repository, and everything
+          # that resolves "latest" (the updater, the website) follows it. A re-publish
+          # rebuilds an *older* tag, so it must not claim that role: it used to move the
+          # badge back to the version being re-published.
           if [[ "${PRERELEASE}" == "true" ]]; then
             channel_args=(--prerelease --latest=false)
-          else
+          elif [[ "${MODE}" == "bump" ]]; then
             channel_args=(--latest)
+          else
+            channel_args=(--latest=false)
           fi
 
           # Only a bump run has a release branch to point the tag at. A re-publish
@@ -430,18 +436,26 @@ jobs:
       # older ones on the page are invitations to install the wrong thing. The tags stay, so
       # the history is still reproducible from source.
       - name: Drop older pre-releases
-        if: needs.prepare.outputs.prerelease == 'true'
+        if: needs.prepare.outputs.prerelease == 'true' && needs.prepare.outputs.mode == 'bump'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           KEEP: ${{ needs.prepare.outputs.tag }}
         run: |
           set -euo pipefail
+          # Only versions below the one being published are dropped. This used to keep
+          # the tag being published and delete every other pre-release, so re-publishing
+          # an old alpha deleted the newer betas (`nightly` included) and their assets.
           gh release list --exclude-drafts --limit 100 --json tagName,isPrerelease \
             --jq '.[] | select(.isPrerelease) | .tagName' \
             | while read -r tag; do
                 [[ -z "${tag}" || "${tag}" == "${KEEP}" ]] && continue
-                echo "dropping ${tag}"
-                gh release delete "${tag}" --yes
+                # `nightly` is rebuilt from main every night and is not a version of its
+                # own; the `v` guard keeps any other non-version tag too.
+                [[ "${tag}" == v* ]] || continue
+                if [[ "$(printf '%s\n%s\n' "${tag}" "${KEEP}" | sort -V | head -n1)" == "${tag}" ]]; then
+                  echo "dropping ${tag}"
+                  gh release delete "${tag}" --yes
+                fi
               done
 
   # Fast-forward only: the release branch is `main` plus the bump commit, so anything else
