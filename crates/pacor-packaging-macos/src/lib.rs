@@ -275,7 +275,7 @@ impl<'a> BundleBuilder for MacOSAppBuilder<'a> {
     }
 
     fn validate(&self) -> Result<()> {
-        let required_tools = ["flutter", "xcodebuild", "codesign"];
+        let required_tools = required_tools_for(self.macos_config);
         let pubspec_path = self.project_root.join("pubspec.yaml");
         let macos_dir = self.project_root.join("macos");
         let required_files = [pubspec_path.as_path(), macos_dir.as_path()];
@@ -297,6 +297,23 @@ impl<'a> BundleBuilder for MacOSAppBuilder<'a> {
     fn flutter_build_path(&self) -> &Path {
         &self.flutter_build_dir
     }
+}
+
+/// The tools a build with `macos_config` actually invokes.
+///
+/// `validate` required `codesign` unconditionally, so an unsigned build failed on a machine
+/// without one, while `hdiutil` — without which `create-dmg` cannot make an image — was never
+/// checked at all. Notarization is the only step that needs `xcrun`, and it is optional like
+/// signing.
+fn required_tools_for(macos_config: &MacOSBuildConfig) -> Vec<&'static str> {
+    let mut tools = vec!["flutter", "xcodebuild", "hdiutil"];
+    if macos_config.codesign_identity.is_some() {
+        tools.push("codesign");
+    }
+    if macos_config.notarize_credentials.is_some() {
+        tools.push("xcrun");
+    }
+    tools
 }
 
 #[cfg(test)]
@@ -410,6 +427,37 @@ mod tests {
         assert!(
             error.contains("Info.plist"),
             "a reused bundle must be localized before it is signed: {error}"
+        );
+    }
+
+    #[test]
+    fn validation_asks_only_for_the_tools_the_configured_build_uses() {
+        let unsigned = MacOSBuildConfig {
+            codesign_identity: None,
+            notarize_credentials: None,
+            ..Default::default()
+        };
+        assert_eq!(
+            required_tools_for(&unsigned),
+            ["flutter", "xcodebuild", "hdiutil"]
+        );
+
+        let signed = MacOSBuildConfig {
+            codesign_identity: Some("Developer ID Application: Example".to_string()),
+            ..unsigned.clone()
+        };
+        assert_eq!(
+            required_tools_for(&signed),
+            ["flutter", "xcodebuild", "hdiutil", "codesign"]
+        );
+
+        let notarized = MacOSBuildConfig {
+            notarize_credentials: Some("AC_PASSWORD".to_string()),
+            ..signed
+        };
+        assert_eq!(
+            required_tools_for(&notarized),
+            ["flutter", "xcodebuild", "hdiutil", "codesign", "xcrun"]
         );
     }
 }
