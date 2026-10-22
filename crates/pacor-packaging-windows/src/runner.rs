@@ -33,10 +33,20 @@ pub(super) fn parse_binary_name(contents: &str) -> Option<String> {
             continue;
         };
 
-        // The name is the first quoted string on the line.
+        // The name is the first quoted string on the line. A line that mentions the key
+        // without one — `set(BINARY_NAME ${PROJECT_NAME})`, a `message(...)` about it — is
+        // not the definition: skipping it keeps looking, where giving up on the file would
+        // silently fall back to the pubspec name or the only-executable heuristic.
         let rest = &line[key_start + BINARY_NAME_KEY.len()..];
-        let value_start = rest.find('"')? + 1;
-        let value_end = rest[value_start..].find('"')? + value_start;
+        let Some(value_start) = rest.find('"').map(|index| index + 1) else {
+            continue;
+        };
+        let Some(value_end) = rest[value_start..]
+            .find('"')
+            .map(|index| index + value_start)
+        else {
+            continue;
+        };
         let name = rest[value_start..value_end].trim();
 
         // A name is a file stem, never a path.
@@ -65,9 +75,18 @@ pub(super) fn parse_legal_copyright(contents: &str) -> Option<String> {
             continue;
         };
 
+        // A line that mentions the key without a value after it is not the definition;
+        // the next one may be, so the search continues instead of ending.
         let rest = &line[key_start + KEY.len()..];
-        let value_start = rest.find('"')? + 1;
-        let value_end = rest[value_start..].find('"')? + value_start;
+        let Some(value_start) = rest.find('"').map(|index| index + 1) else {
+            continue;
+        };
+        let Some(value_end) = rest[value_start..]
+            .find('"')
+            .map(|index| index + value_start)
+        else {
+            continue;
+        };
         let value = rest[value_start..value_end].trim();
 
         if !value.is_empty() {
@@ -209,6 +228,27 @@ mod tests {
 
     use tempfile::TempDir;
 
+    /// A line mentioning the key without a quoted value must not end the search: the
+    /// definition usually follows it, and giving up here fell back to the pubspec name or the
+    /// only-executable heuristic without saying so.
+    #[test]
+    fn a_mention_without_a_value_does_not_hide_the_definition_below_it() {
+        let contents = "message(STATUS \"BINARY_NAME is ${BINARY_NAME}\")\n\
+                        set(BINARY_NAME \"my_app\")\n";
+
+        assert_eq!(parse_binary_name(contents), Some("my_app".to_string()));
+    }
+
+    #[test]
+    fn a_copyright_line_without_a_value_does_not_hide_the_next_one() {
+        let contents = "VALUE \"LegalCopyright\"\n\
+                        VALUE \"LegalCopyright\", \"Copyright 2025 Example Ltd\" \"\\0\"\n";
+
+        assert_eq!(
+            parse_legal_copyright(contents),
+            Some("Copyright 2025 Example Ltd".to_string())
+        );
+    }
     #[test]
     fn binary_name_is_read_from_the_flutter_template_line() {
         let contents = "# Project-level configuration.\n\
