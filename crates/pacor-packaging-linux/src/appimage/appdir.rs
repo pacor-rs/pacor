@@ -31,7 +31,7 @@ use pacor_core::utils::fs::{
     copy_dir, create_symlink, ensure_directory_exists, write_executable_file,
 };
 
-use crate::icon::{Icon, install_icons_to_hicolor_dir};
+use crate::icon::{Icon, hicolor_relative_dir, install_icons_to_hicolor_dir};
 
 /// A staged AppDir.
 ///
@@ -131,10 +131,15 @@ impl AppDir {
     pub(super) fn link_primary_icon(&self, app_name: &str, primary: &Icon) -> Result<()> {
         let file_name = format!("{app_name}.{}", primary.format());
         let target = self.path.join(&file_name);
-        let source = self
-            .path
-            .join("usr/share/icons/hicolor")
-            .join(format!("{}x{}", primary.size(), primary.size()))
+
+        // Relative on purpose: an absolute link would point into the temporary
+        // directory the AppDir is assembled in, which is gone by the time the
+        // AppImage is mounted, leaving the root icon dangling.
+        let source = Path::new("usr")
+            .join("share")
+            .join("icons")
+            .join("hicolor")
+            .join(hicolor_relative_dir(primary))
             .join(&file_name);
 
         create_symlink(&source, &target).with_context(|| {
@@ -243,10 +248,22 @@ mod tests {
         assert!(
             app_dir
                 .path()
-                .join("usr/share/icons/hicolor/32x32/demo.png")
+                .join("usr/share/icons/hicolor/32x32/apps/demo.png")
                 .exists()
         );
-        assert!(app_dir.path().join("demo.png").exists());
+        let link = app_dir.path().join("demo.png");
+        assert_eq!(
+            fs::read_link(&link).unwrap(),
+            Path::new("usr")
+                .join("share")
+                .join("icons")
+                .join("hicolor")
+                .join("32x32")
+                .join("apps")
+                .join("demo.png"),
+            "the link has to be relative to the AppDir itself"
+        );
+        assert!(link.exists(), "and it has to resolve inside the AppDir");
     }
 
     #[test]
