@@ -123,8 +123,10 @@ fn matching_files(root: &Path, flavor: Option<&str>) -> Vec<PathBuf> {
                 .unwrap_or_default();
 
             match flavor {
-                // Flutter accepts `<mode>/app-<mode>.aab` for a plain build.
-                None => parent == MODE,
+                // Flutter accepts `<mode>/app-<mode>.aab` for a plain build, and only that
+                // name: anything else below a `release` directory (a renamed leftover,
+                // `app-release-unsigned.aab`) is not what the build produced.
+                None => parent == MODE && name == plain_file_name(),
                 // …and `<flavor><Mode>/app-<flavor>-<mode>.aab` for a flavored one.
                 Some(flavor) => {
                     parent.contains(&format!("{flavor}{MODE}").to_lowercase())
@@ -312,6 +314,21 @@ mod tests {
             error.contains("platforms.android.flavor"),
             "and the fix is named: {error}"
         );
+    }
+
+    /// A differently named bundle below `release/` is not this build's product.
+    #[test]
+    fn a_differently_named_bundle_is_not_accepted_as_the_plain_one() {
+        let directory = bundle_dir();
+        stage(directory.path(), "release/app-release-unsigned.aab");
+
+        let error = find_bundle(directory.path(), None).unwrap_err().to_string();
+
+        assert!(
+            error.contains("did not produce an Android App Bundle"),
+            "{error}"
+        );
+        assert!(error.contains("app-release-unsigned.aab"), "{error}");
     }
 
     #[test]

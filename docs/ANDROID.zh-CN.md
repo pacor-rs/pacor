@@ -117,15 +117,20 @@ Android 后端始终构建 **release**（APK 与 AAB 都是），`[build] flutte
 ### APK 产物定位
 
 Flutter 的 Gradle 插件把拆分 APK 复制到 `build/app/outputs/flutter-apk/` 并命名为
-`app<-abi>?<-flavor-name>?-<build-mode>.apk`。pacor 依次尝试：
+`app<-abi>?<-flavor-name>?-<build-mode>.apk`。文件名里带着本次构建所用的 flavor，所以
+pacor 只找这次构建可能写出来的文件：
 
-1. `app-<abi>-release.apk`；
-2. `flavor` 已配置时的 `app-<abi>-<flavor>-release.apk`；
-3. 目录中唯一匹配 `app-<abi>-*-release.apk` 的文件（例如由 `flavor` 产生但名字更长的产物）。
+1. `flavor` 已配置时找 `app-<abi>-<flavor>-release.apk`，否则找 `app-<abi>-release.apk`；
+2. 目录中唯一匹配 `app-<abi>-*-release.apk` 的文件。配置了 `flavor` 时，该候选必须带同一个
+   flavor（比较时忽略大小写，因为 AGP 某些版本会把 flavor 转成小写）；没有配置 `flavor` 时，
+   唯一候选直接采用——这正是 `--use-existing-flutter-build` 的情形：flavor 由构建该 APK 的
+   那一方决定。
 
-匹配到多个候选时构建失败并列出候选，不会随便挑一个；一个都没匹配到时会列出该目录实际
-包含的文件。这样配置了 `flavor` 却忘了写进 `pacor.toml` 的工程也会得到可读的报错，而不是
-一句 `系统找不到指定的文件。 (os error 2)`。
+带**另一个** flavor 的文件、或有 flavor 构建旁边的无 flavor 文件名，都不可能是本次构建的
+产物：`flutter build apk --flavor prod` 只会写出带 flavor 的名字，这类文件来自上一次构建，
+打包它就会把错误的 APK 签名后当作本次发布件交付。匹配到多个候选时构建失败并列出候选，
+不会随便挑一个；一个都没匹配到时会列出该目录实际包含的文件——这样配置了 `flavor` 却忘了
+写进 `pacor.toml` 的工程也会得到可读的报错，而不是一句 `系统找不到指定的文件。 (os error 2)`。
 
 ### AAB 产物定位
 
@@ -142,7 +147,9 @@ build/app/outputs/bundle/<flavor>Release/app-<flavor>-release.aab # 有 flavor
 
 包在 flavor 目录下、但配置里没写 `flavor` 时，pacor **不会**猜着打包：它报错并列出找到的
 `.aab`，同时提示设置 `platforms.android.flavor`——这种文件通常是别的 flavor 或上次构建的
-残留，静默打包等于发布错误的东西。多个候选同理，会列出候选名。
+残留，静默打包等于发布错误的东西。无 flavor 的文件名同样是精确匹配：`release/` 下只接受
+`app-release.aab`，因此被改名的残留（如 `app-release-unsigned.aab`）只会被报出来，不会被
+打包。多个候选同理，会列出候选名。
 
 ## ABI
 
@@ -304,8 +311,9 @@ AAB 还会额外提示"Play 要求 upload key 签名"。找不到对应工具时
 
 ### `Flutter did not produce an APK for <abi>`
 
-Flutter 没有产出该 ABI 的 APK，或产出名与预期不符（最常见的是工程配了 `flavor` 而
-`pacor.toml` 里没写）。报错会列出目录内容与候选；确认 `platforms.android.flavor` 后重试。
+Flutter 没有产出该 ABI 的 APK，或产出的文件不带配置的 `flavor`——最常见的原因是工程的
+Gradle flavor 与 `platforms.android.flavor` 不一致，或者目录里还留着上一次构建的文件。
+报错会给出期望的文件名并列出目录内容；确认 `platforms.android.flavor` 后重试。
 `several APKs match <abi>` 则表示同目录下有多个候选（例如一次构建了多个 flavor），
 此时必须显式指定 `flavor`。
 
