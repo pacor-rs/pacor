@@ -3,7 +3,7 @@
 
 use std::{fs, path::Path};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use pacor_core::config::{AppConfig, AppMetadata};
 use pacor_core::utils::fs::ensure_directory_exists;
@@ -71,13 +71,16 @@ pub fn add_localization_resources(app_bundle_path: &Path, app_config: &AppConfig
 
     let locale_count = localizations.len();
     let plist_path = contents_dir.join("Info.plist");
-    let mut plist = Plist::parse(&fs::read_to_string(&plist_path)?);
+    let contents = fs::read_to_string(&plist_path)
+        .with_context(|| format!("failed to read {}", plist_path.display()))?;
+    let mut plist = Plist::parse(&contents);
     plist.insert("CFBundleLocalizations", localizations);
     plist.insert(
         "CFBundleDevelopmentRegion",
         app_config.default_locale().as_apple(),
     );
-    fs::write(&plist_path, plist.to_string())?;
+    fs::write(&plist_path, plist.to_string())
+        .with_context(|| format!("failed to write {}", plist_path.display()))?;
 
     debug!(locales = locale_count, "Localization resources installed");
     Ok(())

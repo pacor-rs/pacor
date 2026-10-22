@@ -169,14 +169,19 @@ impl<'a> BundleBuilder for MacOSAppBuilder<'a> {
             .join(format!("{}.app", self.flutter_project.name()));
         trace!(app_bundle_path = %app_bundle_path.display(), "Located .app bundle");
 
+        // Installing the packaging tools and adding localization resources are pacor's own
+        // steps, not Flutter's. Inside the branch below they were skipped by
+        // `--use-existing-flutter-build`, which then ran `bash` against a script that had
+        // never been written on a cold cache, and packaged a bundle without its `.lproj`
+        // resources.
+        tools::prepare_packaging_tools(&self.tools_dir, &self.create_dmg_script_path)?;
+
         if !skip_flutter_build {
-            tools::prepare_packaging_tools(&self.tools_dir, &self.create_dmg_script_path)?;
             flutter_build::build_flutter_app(
                 &self.project_root,
                 self.build_mode,
                 &command_output_mode,
             )?;
-            localization::add_localization_resources(&app_bundle_path, self.app_config)?;
         } else {
             info!("Skipping Flutter build as requested");
 
@@ -184,6 +189,9 @@ impl<'a> BundleBuilder for MacOSAppBuilder<'a> {
                 return Err(anyhow!("Flutter build output directory does not exist"));
             }
         }
+
+        // Localization rewrites the bundle, so it has to run before `codesign` seals it.
+        localization::add_localization_resources(&app_bundle_path, self.app_config)?;
 
         let filename_base = pacor_core::packaging::artifact_base_name(
             self.flutter_project.name(),
@@ -288,5 +296,120 @@ impl<'a> BundleBuilder for MacOSAppBuilder<'a> {
 
     fn flutter_build_path(&self) -> &Path {
         &self.flutter_build_dir
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// A fixture project, its configuration, and the scratch directory holding both.
+    ///
+    /// The Flutter build directory is deliberately left uncreated: both regressions below are
+    /// about what pacor does *around* a build it was told to skip, so the tests stop at the
+    /// first step that would need a real toolchain.
+    struct Fixture {
+        directory: tempfile::TempDir,
+        config: PacorConfig,
+        macos_config: MacOSBuildConfig,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            let project_root = directory.path().join("project");
+            fs::create_dir_all(&project_root).unwrap();
+            fs::write(
+                project_root.join("pubspec.yaml"),
+                "name: demo_app\nversion: 1.0.0+1\n",
+            )
+            .unwrap();
+
+            Self {
+                directory,
+                config: PacorConfig::default(),
+                macos_config: MacOSBuildConfig::default(),
+            }
+        }
+
+        fn project_root(&self) -> PathBuf {
+            self.directory.path().join("project")
+        }
+
+        fn build_dir(&self) -> PathBuf {
+            self.project_root()
+                .join("build/macos/Build/Products/Release")
+        }
+
+        fn bundle_path(&self) -> PathBuf {
+            self.build_dir().join("demo_app.app")
+        }
+
+        fn tools_dir(&self) -> PathBuf {
+            self.directory.path().join("tools")
+        }
+
+        fn output_dir(&self) -> PathBuf {
+            self.directory.path().join("dist")
+        }
+
+        fn builder(&self) -> MacOSAppBuilder<'_> {
+            MacOSAppBuilder {
+                app_config: &self.config.app,
+                macos_config: &self.macos_config,
+                flutter_project: FlutterProject::load_from_pubspec(&self.project_root()).unwrap(),
+                project_root: self.project_root(),
+                flutter_build_dir: self.build_dir(),
+                output_dir: self.output_dir(),
+                tools_dir: self.tools_dir(),
+                create_dmg_script_path: self.tools_dir().join("create-dmg.sh"),
+                arch: Arch::current().unwrap(),
+                build_mode: FlutterBuildMode::Release,
+            }
+        }
+    }
+
+    #[test]
+    fn skipping_the_flutter_build_still_installs_the_packaging_tools() {
+        let fixture = Fixture::new();
+        let builder = fixture.builder();
+
+        // The build directory is absent, so the build stops there: after pacor's own
+        // preparation, before anything that would need `bash` or `hdiutil`.
+        let Err(error) = builder.build(true, CommandOutputMode::None) else {
+            panic!("a missing Flutter build directory must fail the build");
+        };
+        let error = error.to_string();
+
+        assert!(
+            error.contains("Flutter build output directory does not exist"),
+            "{error}"
+        );
+        assert!(
+            builder.create_dmg_script_path.is_file(),
+            "the create-dmg script must be installed even when Flutter is not run: {}",
+            builder.create_dmg_script_path.display()
+        );
+    }
+
+    #[test]
+    fn skipping_the_flutter_build_still_localizes_the_bundle() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.build_dir()).unwrap();
+        // A bundle with no `Info.plist`: localization is what reads it, so failing on it is
+        // how this test observes that the reused-build path localizes at all.
+        fs::create_dir_all(fixture.bundle_path().join("Contents/Resources")).unwrap();
+        let builder = fixture.builder();
+
+        let Err(error) = builder.build(true, CommandOutputMode::None) else {
+            panic!("a bundle without Info.plist must fail the build");
+        };
+        let error = error.to_string();
+
+        assert!(
+            error.contains("Info.plist"),
+            "a reused bundle must be localized before it is signed: {error}"
+        );
     }
 }
