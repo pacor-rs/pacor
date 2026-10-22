@@ -127,6 +127,9 @@ category = "public.app-category.entertainment"
 # sandbox. Point it somewhere else to override that.
 # codesign_entitlements = "macos/Runner/Release.entitlements"
 # notarize_credentials = "AC_PASSWORD"   # notarytool keychain profile
+# A submission Apple rejects fails the build with the submission id, because
+# notarytool exits 0 either way; `xcrun notarytool log <id> --keychain-profile
+# AC_PASSWORD` is what says why.
 
 # ---------------------------------------------------------------------------
 # Android: per-ABI APK and/or an Android App Bundle
