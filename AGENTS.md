@@ -215,9 +215,11 @@ gh pr create --base main --fill
   was written under different assumptions than the part that is reviewed.
 - **The merged branch is deleted for you**: `delete-merged-branch.yml` removes the head ref of
   every merged pull request (it keeps long-lived names, forks, and a branch that another open
-  pull request still uses). A merge made with `GITHUB_TOKEN` — which is what `automerge`
-  does — emits no event GitHub will start a workflow for, so the `auto-merge` job calls the
-  cleanup itself; `gh pr merge --delete-branch` just does not wait for either.
+  pull request still uses). The cleanup listens to `pull_request.closed`, which is why
+  `automerge` merges with the `AUTOMERGE_TOKEN` secret and not with `GITHUB_TOKEN`: GitHub
+  does not start a workflow for the events `GITHUB_TOKEN` causes, so such a merge would be
+  invisible to it. Keep that secret alive (Contents, Pull requests and Workflows: write);
+  without it a labelled pull request fails its `Auto Merge` job on purpose.
 
 The one commit that reaches `main` without a pull request is the release bump that
 `publish.yml` fast-forwards in — after the release is public, and only when `main` has not

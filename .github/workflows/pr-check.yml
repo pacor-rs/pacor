@@ -31,8 +31,8 @@ env:
   # restored build directory bigger (and prints a "could not be used" warning).
   CARGO_INCREMENTAL: 0
 
-# Least privilege by default; `auto-merge` asks for the write scopes it needs, and a
-# job-level block replaces this one rather than adding to it.
+# Least privilege by default. A job-level block replaces this one rather than adding to
+# it, so a job that needs to write spells out every scope it uses.
 permissions:
   contents: read
 
@@ -316,6 +316,12 @@ jobs:
   # pull request labelled `automerge` is merged as soon as no executed check failed.
   # A skipped check (nothing relevant changed) is fine; a failed or cancelled one is
   # not, which is why the `needs` results are spelled out instead of `success()`.
+  #
+  # The merge runs on `AUTOMERGE_TOKEN`, not `GITHUB_TOKEN`, and that is the whole point:
+  # GitHub does not start a workflow for the events `GITHUB_TOKEN` causes, so a merge made
+  # with it leaves the `pull_request.closed` listener in `delete-merged-branch.yml` with
+  # nothing to hear. #17 and #18 were merged that way and their branches stayed behind. A
+  # token that belongs to a person or an app produces a real event, and the cleanup runs.
   auto-merge:
     name: "Auto Merge"
     runs-on: ubuntu-latest
@@ -331,31 +337,48 @@ jobs:
       && (needs.cross-check.result == 'success' || needs.cross-check.result == 'skipped')
       && (needs.workflow-lint.result == 'success' || needs.workflow-lint.result == 'skipped')
     timeout-minutes: 10
+    # `gh` reads the label with the repository's own token; the merge itself uses
+    # `AUTOMERGE_TOKEN`, which is why no write scope is requested here.
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+      pull-requests: read
     steps:
+      # The action below fails with "environment variable GITHUB_TOKEN not set!" when the
+      # secret is empty, which says nothing about what to do. The label is read through the
+      # API rather than from the payload, because a label added after the run started is not
+      # in the payload while the action itself reads it live.
+      - name: Check that the merge token is configured
+        env:
+          TOKEN: ${{ secrets.AUTOMERGE_TOKEN }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          # There is no checkout in this job, so `gh` cannot infer the repository from a
+          # remote; without this it fails before it reads a single label.
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ -n "${TOKEN:-}" ]]; then
+            exit 0
+          fi
+
+          labels=$(gh pr view "${NUMBER}" --json labels --jq '.labels[].name') || {
+            echo "::error::Could not read the labels of #${NUMBER}."
+            exit 1
+          }
+
+          if ! grep -qx automerge <<< "${labels}"; then
+            echo "::notice::#${NUMBER} has no automerge label, so the missing AUTOMERGE_TOKEN is not used here."
+            exit 0
+          fi
+
+          echo "::error::AUTOMERGE_TOKEN is not set, so this labelled pull request cannot be merged."
+          echo "::error::Create a fine-grained personal access token for this repository with"
+          echo "::error::Contents, Pull requests and Workflows set to read and write, then store it:"
+          echo "::error::  gh secret set AUTOMERGE_TOKEN --body <token>"
+          exit 1
+
       - name: Auto merge PR
         uses: pascalgn/automerge-action@v0.16.4
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.AUTOMERGE_TOKEN }}
           MERGE_LABELS: "automerge"
           MERGE_REMOVE_LABELS: "automerge"
-
-  # The merge above is performed with `GITHUB_TOKEN`, and GitHub does not start a workflow
-  # for the events that token causes: the `pull_request.closed` listener in
-  # `delete-merged-branch.yml` never saw the merges of #17 and #18, so their branches stayed
-  # behind. Calling the cleanup here, where the merge happens, is the fix; a schedule that
-  # swept for leftovers would only have hidden the missing event.
-  delete-merged-branch:
-    name: "Delete merged branch"
-    needs: [auto-merge]
-    # A pull request without the label is not merged by the action, and a fork never reaches
-    # the job above; the cleanup is a no-op in both cases and says so in its own summary.
-    if: needs.auto-merge.result == 'success'
-    permissions:
-      contents: write
-      pull-requests: read
-    uses: ./.github/workflows/delete-merged-branch.yml
-    with:
-      pull_request_number: ${{ github.event.pull_request.number }}
