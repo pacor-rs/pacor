@@ -127,6 +127,10 @@ pub enum Commands {
         /// Reuse existing Flutter build artifacts.
         #[arg(long)]
         use_existing_flutter_build: bool,
+
+        /// Do not clean temporary files after building.
+        #[arg(long)]
+        skip_cleanup: bool,
     },
 
     /// Remove downloaded tools and templates from the cache.
@@ -165,4 +169,45 @@ pub enum Commands {
         #[arg(long = "full")]
         show_full_config: bool,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use clap::Parser;
+
+    fn android_flags(arguments: &[&str]) -> (bool, bool) {
+        let mut argv = vec!["pacor", "android"];
+        argv.extend_from_slice(arguments);
+
+        let cli = Cli::try_parse_from(argv).unwrap();
+        let Commands::Android {
+            use_existing_flutter_build,
+            skip_cleanup,
+        } = cli.subcommand
+        else {
+            panic!("expected the android subcommand");
+        };
+
+        (use_existing_flutter_build, skip_cleanup)
+    }
+
+    /// The alias exists so nobody has to remember `--target android`, so it has to accept
+    /// the same switches: without `--skip-cleanup` the post-build `flutter clean` deletes the
+    /// `tmp/` symbols that `--split-debug-info` produced, and publishing without symbols
+    /// means production stack traces can never be restored.
+    #[test]
+    fn the_android_alias_accepts_skip_cleanup() {
+        assert_eq!(android_flags(&["--skip-cleanup"]), (false, true));
+        assert_eq!(
+            android_flags(&["--use-existing-flutter-build", "--skip-cleanup"]),
+            (true, true)
+        );
+    }
+
+    #[test]
+    fn the_android_alias_cleans_up_by_default() {
+        assert_eq!(android_flags(&[]), (false, false));
+    }
 }
