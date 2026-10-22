@@ -6,6 +6,21 @@
 
 本文档详细说明了 Pacor 工具支持的环境变量及其用法。
 
+## 构建环境变量
+
+### PACOR_OUTPUT_DIR
+
+**用途**: 覆盖 `[build] output_dir`，即产物写入的目录。
+
+**格式**: 相对项目根目录的路径，且必须位于项目内——绝对路径、包含 `..` 的路径与 `.` 都会被拒绝，
+因为 `pacor clean` 会整体删除该目录。
+
+### PACOR_BUILD_MODE
+
+**用途**: 覆盖 `[build] flutter_build_mode`。
+
+**格式**: `release`、`debug` 或 `profile`。
+
 ## 下载器环境变量
 
 Pacor 的下载器模块支持通过环境变量配置 GitHub 镜像，以提高下载速度和可靠性，特别适用于网络受限的环境。
