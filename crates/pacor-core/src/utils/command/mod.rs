@@ -310,6 +310,25 @@ fn find_command_with_extension(dir: &Path, command_name: &str) -> Option<std::pa
     None
 }
 
+/// Whether `path` is a file the current user is allowed to execute.
+///
+/// `is_file` alone accepted a data file that happened to carry the command's name, and the
+/// caller then used it as the tool: a stray `makensis` text file earlier in `PATH` shadowed
+/// the real compiler, so the search stopped there and the build failed with "permission
+/// denied" instead of looking further down the list.
+///
+/// Any execute bit counts. POSIX wants the one that matches the caller's identity, but the
+/// difference only matters for a file we could not run anyway, and that failure is reported
+/// by the command's own exit status.
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    path.metadata()
+        .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
 pub fn find_command_path(command_name: &str) -> Result<Option<std::path::PathBuf>> {
     let paths = match std::env::var_os("PATH") {
         None => {
@@ -331,7 +350,7 @@ pub fn find_command_path(command_name: &str) -> Result<Option<std::path::PathBuf
         #[cfg(unix)]
         {
             let candidate = dir.join(command_name);
-            if candidate.is_file() {
+            if is_executable_file(&candidate) {
                 debug!(path = %candidate.display(), command = command_name, "Found executable in PATH");
                 return Ok(Some(candidate));
             }
@@ -369,6 +388,26 @@ pub fn execute_flutter_clean_command(
 mod tests {
     use super::*;
 
+    /// A file with the command's name but no execute bit is not a command: it used to be
+    /// returned as the tool, hiding the real one further down `PATH`.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_without_the_execute_bit_is_not_a_command() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::TempDir::new().unwrap();
+
+        let plain = temp.path().join("flutter");
+        std::fs::write(&plain, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let executable = temp.path().join("makensis");
+        std::fs::write(&executable, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(!is_executable_file(&plain));
+        assert!(is_executable_file(&executable));
+    }
     #[test]
     fn test_flutter_executable() {
         let executable = flutter_executable();
