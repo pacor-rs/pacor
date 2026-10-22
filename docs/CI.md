@@ -19,7 +19,7 @@ because nothing happened" has to say so out loud.**
 | `nightly.yml` | every day at 04:00 UTC, or manual dispatch | build `main`, replace the `nightly` pre-release wholesale |
 | `warm-cache.yml` | Cargo file changes on `main`, Monday 05:00 UTC, manual dispatch | write the cargo registry and target caches ahead of time |
 | `cleanup-old-caches.yml` | Monday 00:00 UTC, or manual dispatch (`dry_run`) | keep only the newest entry of each cache family |
-| `delete-merged-branch.yml` | a pull request is closed after being merged | delete the head branch, unless it is long-lived, from a fork, or still used by an open pull request |
+| `delete-merged-branch.yml` | a merged pull request closes, every 15 minutes, or manual dispatch | delete the head branch of a merged pull request unless it is long-lived, from a fork, or still used by an open pull request; the schedule covers merges made with `GITHUB_TOKEN`, which emit no event |
 
 ## Releasing
 
@@ -78,16 +78,24 @@ way out of a broken asset.
 
 ## Branch cleanup
 
-`delete-merged-branch.yml` runs when a pull request is closed **and merged** — the
-`automerge` label and a person pressing "Merge" are the same event — and deletes the head
-branch. It keeps a branch when:
+`delete-merged-branch.yml` deletes the head branch of a merged pull request. It keeps a
+branch when:
 
-- it is a long-lived name (`main`, `master`, `develop`, `release/*`, `release-*`): a pull
-  request that happened to use one of those as its head is not an argument for deleting it;
+- it is a long-lived name (`main`, `master`, `develop`, `dev`, `backup`, `release/*`,
+  `release-*`): a pull request that happened to use one of those as its head is not an
+  argument for deleting it;
 - the pull request came from a fork: the branch lives in another repository, which this
   token cannot reach;
 - another open pull request still uses it as its head — a stacked pair looks exactly like
   that, and deleting the ref would close the child pull request without a decision.
+
+Two triggers feed it. `pull_request.closed` fires when a person presses "Merge", and the
+deletion runs seconds later. It does **not** fire for a merge performed with the
+repository's `GITHUB_TOKEN`: GitHub suppresses the events that token causes, and
+`automerge` merges as `app/github-actions`. That is what the 15-minute schedule is for, and
+`workflow_dispatch` runs the same sweep immediately. The sweep reads the 200 most recent
+merged pull requests, matches them against one listing of the repository's refs, and
+applies the guards above; a branch that survived is retried on the next run.
 
 A ref that is already gone counts as success: with the repository's own "Automatically
 delete head branches" setting enabled, this workflow is a second opinion rather than the
