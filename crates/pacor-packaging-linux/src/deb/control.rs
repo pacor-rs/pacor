@@ -84,7 +84,11 @@ fn generate_control_file(
     )?;
     writeln!(file, "Maintainer: {}", maintainer(context))?;
     writeln!(file, "Homepage: {}", context.app_config.url())?;
-    writeln!(file, "Description: {}", context.description)?;
+    writeln!(
+        file,
+        "Description: {}",
+        description_field(context.description)
+    )?;
 
     if let Some(section) = context.debian.section() {
         writeln!(file, "Section: {section}")?;
@@ -99,6 +103,28 @@ fn generate_control_file(
 
     file.flush()?;
     Ok(())
+}
+
+/// Fold a description into the one field Debian policy allows.
+///
+/// The first line is the synopsis and follows `Description:`; every further line is a
+/// continuation and must start with a space, an empty one written as a single ` .`.
+/// Writing the value raw — which is what a `description` with newlines got — put the
+/// second line at column 0, where dpkg reads it as a new field and refuses the package.
+fn description_field(description: &str) -> String {
+    let mut rendered = String::from(description.lines().next().unwrap_or_default().trim());
+
+    for line in description.lines().skip(1) {
+        rendered.push('\n');
+        if line.trim().is_empty() {
+            rendered.push_str(" .");
+        } else {
+            rendered.push(' ');
+            rendered.push_str(line.trim_end());
+        }
+    }
+
+    rendered
 }
 
 /// Resolve the `Maintainer` field: explicit config, then authors, then publisher.
@@ -249,6 +275,34 @@ mod tests {
         (dir, written)
     }
 
+    /// A continuation line at column 0 is read as a new field; dpkg then rejects the
+    /// package for a malformed control file, which is what a `description` with newlines
+    /// used to produce.
+    #[test]
+    fn a_multi_line_description_is_folded_into_one_field() {
+        let dir = TempDir::new().unwrap();
+        let control_dir = dir.path().join("control");
+        let data_dir = dir.path().join("data");
+        ensure_directory_exists(&control_dir).unwrap();
+        ensure_directory_exists(&data_dir).unwrap();
+
+        let app_config = app_config();
+        let debian = DebianConfig::default();
+        let mut control_context = context(&app_config, &debian);
+        control_context.description = "A demo app\nIt does things\n\nAnd more";
+        write_control_members(&control_dir, &data_dir, &control_context).unwrap();
+
+        let control = fs::read_to_string(control_dir.join("control")).unwrap();
+        assert!(
+            control.contains("Description: A demo app\n It does things\n .\n And more\n"),
+            "{control}"
+        );
+    }
+
+    #[test]
+    fn a_single_line_description_is_written_unchanged() {
+        assert_eq!(description_field("A demo app"), "A demo app");
+    }
     #[test]
     fn control_contains_required_fields() {
         let (_dir, control) = write_control(&DebianConfig::default());
