@@ -11,7 +11,7 @@
 //! usr/lib/<app>/                         # bundled shared libraries
 //! usr/share/<app>/                       # application data / assets
 //! usr/share/applications/<app>.desktop   # desktop entry
-//! usr/share/icons/hicolor/<size>/        # icons
+//! usr/share/icons/hicolor/<size>/apps/   # icons
 //! usr/share/doc/<app>/copyright          # copyright
 //! ```
 
@@ -150,7 +150,10 @@ fn install_icons(data_root: &Path, context: &DataContext<'_>) -> Result<()> {
     let hicolor_dir = data_root.join("usr/share/icons/hicolor");
     ensure_directory_exists(&hicolor_dir)?;
 
-    install_icons_to_hicolor_dir(context.package_name, &hicolor_dir, context.icons.values())?;
+    // The desktop entry names the icon after the executable, so the files have to
+    // carry that same name: `package_name` is hyphenated for `dpkg`, and an icon it
+    // points at does not exist.
+    install_icons_to_hicolor_dir(context.executable_name, &hicolor_dir, context.icons.values())?;
 
     debug!(directory = %hicolor_dir.display(), "Icons installed");
     Ok(())
