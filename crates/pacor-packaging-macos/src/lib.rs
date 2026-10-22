@@ -12,7 +12,7 @@
 //! - `signing`: `codesign`
 //! - `notarization`: `notarytool submit` + `stapler staple`
 //! - `updater`: `.app.tar.gz` archive
-//! - `plist`: minimal plist read/modify/write
+//! - `plist`: edits the built `Info.plist` in place, keeping what it does not model
 //!
 //! This module is compiled on every host; whether the macOS toolchain is
 //! available is decided by [`MacOSAppBuilder::validate`] at runtime.

@@ -71,14 +71,20 @@ pub fn add_localization_resources(app_bundle_path: &Path, app_config: &AppConfig
 
     let locale_count = localizations.len();
     let plist_path = contents_dir.join("Info.plist");
-    let contents = fs::read_to_string(&plist_path)
-        .with_context(|| format!("failed to read {}", plist_path.display()))?;
+    let contents = fs::read_to_string(&plist_path).with_context(|| {
+        format!(
+            "failed to read {} (pacor edits an XML `Info.plist`; if the build wrote a binary \
+             one, convert it first with `plutil -convert xml1 {}`)",
+            plist_path.display(),
+            plist_path.display()
+        )
+    })?;
     let mut plist = Plist::parse(&contents);
-    plist.insert("CFBundleLocalizations", localizations);
+    plist.insert("CFBundleLocalizations", localizations)?;
     plist.insert(
         "CFBundleDevelopmentRegion",
         app_config.default_locale().as_apple(),
-    );
+    )?;
     fs::write(&plist_path, plist.to_string())
         .with_context(|| format!("failed to write {}", plist_path.display()))?;
 
