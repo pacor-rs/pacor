@@ -145,6 +145,11 @@ Some of these are not ceremony:
 
 Format: `<type>(<scope>): <summary>`
 
+- **English only**, subject and body alike, whatever language the change was discussed in.
+  The history is read by people, tools and agents that do not share the conversation, and a
+  commit is the one artefact that cannot be translated afterwards without rewriting it. If
+  the reasoning is easier to state in another language, it belongs in the pull request
+  description; the commit keeps the English form of it.
 - `type`: `feat`, `fix`, `docs`, `refactor`, `test`, `ci`, `chore`, `perf` (the log currently
   uses `feat`, `fix`, `docs`, `ci`, `refactor`).
 - `scope`: the affected area or crate — `windows`, `android`, `core`, `tools`, `downloads`,
