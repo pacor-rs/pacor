@@ -4,8 +4,20 @@ use std::{
 };
 
 use sha1::{Digest, Sha1};
+use sha2::Sha256;
 
 use anyhow::{Context, Result};
+
+/// Lowercase hex SHA-256 of `bytes`.
+///
+/// Used to pin a download to the exact bytes it is expected to deliver: a release asset can be
+/// replaced by its owner at any time, and TLS says nothing about that.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+
+    format!("{:x}", hasher.finalize())
+}
 
 pub fn calculate_sha1(file_path: &Path) -> Result<String> {
     let mut file = fs::File::open(file_path)?;
@@ -39,6 +51,17 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    #[test]
+    fn sha256_matches_the_published_vectors() {
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            sha256_hex(b"hello world"),
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
+    }
     #[test]
     fn test_calculate_sha1_known_content() {
         let dir = tempfile::TempDir::new().unwrap();

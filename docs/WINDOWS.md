@@ -158,6 +158,18 @@ If the system-wide NSIS needs administrator rights to write to its plugin direct
 fact NSIS 2 (which cannot compile a `Unicode True` template), pacor warns and uses its own
 cache instead of failing the build.
 
+The download is checked against a pinned SHA-256 (`NSIS_ARCHIVE_SHA256` in
+`crates/pacor-packaging-windows/src/nsis/mod.rs`) before anything is unpacked. The URL names a
+release *tag*, and a tag is not immutable: its owner can replace the asset, and neither TLS
+nor the pinned templates would notice. To refresh the pin after an intentional upstream change,
+run the ignored test that downloads the published archive and checks it:
+
+```bash
+cargo test -p pacor-packaging-windows -- --ignored the_pinned_digest_matches_the_published_archive
+# or, without a checkout:
+curl -sL https://github.com/tauri-apps/binary-releases/releases/download/nsis-3/nsis-3.zip | sha256sum
+```
+
 The cache lives in `<user config directory>/pacor/windows/nsis/<template tag>`, which on
 Windows is `%APPDATA%\pacor\windows\nsis\1.1\`. That directory holds both the NSIS
 distribution and the templates for the pinned tag:
