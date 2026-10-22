@@ -8,6 +8,7 @@ use anyhow::{Context, Result, anyhow};
 use pacor_core::config::PacorConfig;
 use pacor_core::core::project::{find_flutter_project_root, validate_project_environment};
 use pacor_core::error::{ConfigurationError, Error};
+use pacor_core::packaging::remove_output_directory;
 use pacor_core::platforms::Platform;
 use pacor_core::utils::command::{CommandOutputMode, execute_flutter_clean_command};
 use pacor_core::utils::fs::{clean_dir, directory_size};
@@ -54,13 +55,13 @@ pub fn clean(target: Option<Platform>, config_path: Option<&std::path::Path>) ->
     formatter.section("Cleaning Build Artifacts");
 
     let config = PacorConfig::load_from(config_path)?;
+    let project_root = config.project_root()?;
     let output_dir = config.output_dir()?;
     if output_dir.exists() {
         formatter.info(&format!("Removing {}", output_dir.display()));
-        clean_dir(&output_dir)?;
+        remove_output_directory(&output_dir, &project_root)?;
     }
 
-    let project_root = find_flutter_project_root()?;
     let flutter_build_dir = project_root.join("build");
     if flutter_build_dir.exists() {
         formatter.info(&format!("Removing {}", flutter_build_dir.display()));
