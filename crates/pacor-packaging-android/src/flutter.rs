@@ -29,13 +29,20 @@ pub(crate) fn build_apk(
     config: &AndroidConfig,
     command_output_mode: &CommandOutputMode,
 ) -> Result<()> {
-    let mut args = shared_args("apk", config);
-    // Flag order is irrelevant to Flutter; keeping this here makes the
-    // APK-only nature of `--split-per-abi` visible.
-    args.push("--split-per-abi".into());
+    let args = apk_args(config);
 
     info!(abis = %target_platforms(config), "Building split release APKs");
     run(args, project_root, command_output_mode)
+}
+
+/// The argument vector for `flutter build apk`.
+///
+/// `--split-per-abi` is APK-only — Google Play splits a bundle per device — so it is added
+/// here rather than in `shared_args`, which both builds use.
+fn apk_args(config: &AndroidConfig) -> Vec<OsString> {
+    let mut args = shared_args("apk", config);
+    args.push("--split-per-abi".into());
+    args
 }
 
 /// Builds the Android App Bundle, which Google Play splits per device.
@@ -123,20 +130,33 @@ mod tests {
         assert!(config.target_abi.contains(&TargetAbi::Arm64));
     }
 
+    /// The complete vectors, so dropping `--split-per-abi` from the APK build fails here.
+    /// The assertion this replaces counted the flag in the vector that never carries it, and
+    /// so passed whether or not the APK build passed it.
     #[test]
     fn an_apk_build_splits_per_abi_and_a_bundle_does_not() {
         let config = AndroidConfig::default();
 
-        let apk = shared_args("apk", &config);
-        let bundle = shared_args("appbundle", &config);
-
-        assert_eq!(apk[0], "apk");
-        assert_eq!(bundle[0], "appbundle");
-        assert!(apk.contains(&"--split-debug-info=tmp/".into()));
-        assert!(bundle.contains(&"--split-debug-info=tmp/".into()));
         assert_eq!(
-            apk.iter().filter(|arg| *arg == "--split-per-abi").count(),
-            0
+            apk_args(&config),
+            [
+                "apk",
+                "--release",
+                "--split-debug-info=tmp/",
+                "--target-platform",
+                "android-arm64",
+                "--split-per-abi",
+            ]
+        );
+        assert_eq!(
+            shared_args("appbundle", &config),
+            [
+                "appbundle",
+                "--release",
+                "--split-debug-info=tmp/",
+                "--target-platform",
+                "android-arm64",
+            ]
         );
     }
 
