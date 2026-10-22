@@ -204,7 +204,7 @@ flutter build windows --<mode>
   → sign the main executable (NSIS requires it too: the MSI embeds the file contents in the CAB)
   → harvest(build output)                 → payload.wxs
   → render main.wxs per language (with the LCID) + <culture>.wxl
-  → candle -arch x64 payload.wxs          → payload.wixobj (shared by all languages)
+  → candle -arch <x64|arm64> payload.wxs  → payload.wixobj (shared by all languages)
   → candle main.wxs per language          → <culture>-main.wixobj
   → per language: light -ext WixUIExtension -cultures:<locale> -loc <culture>.wxl
           -sice:ICE60 -sice:ICE61 -pdbout <temp dir>
@@ -325,8 +325,10 @@ Even though the whole package is per-machine, ICE still treats shortcut componen
 - without `-arch x64`, candle emits an **Intel (32-bit) package**: measured on this machine, the
   ARP entry lands in `HKLM\Software\WOW6432Node\...\Uninstall` (not the native view); installing
   components into a 64-bit directory also triggers ICE80 (a known rule, which this design avoids by
-  pinning `-arch x64`). The payload is a 64-bit Flutter application, so `-arch x64` is fixed along
-  with `Package/@Platform="x64"`;
+  always passing `-arch`). The value is the payload's own architecture — `x64` or `arm64`, the
+  spelling candle expects, taken from the same `Arch` that names the artifact and the build
+  directory — so an ARM64 build produces a package Windows registers as ARM64 rather than an Intel
+  one it would install and repair as 32-bit-on-ARM;
 - a per-machine installation **needs administrator**: in a non-elevated session `msiexec /i /qn`
   fails at `InstallFinalize` and the log gives `Error 1925: You do not have sufficient privileges to complete this
   installation for all users of the machine` (measured, exit code 1603, rolled back cleanly).
@@ -462,7 +464,7 @@ This spike was done on Windows, with the scripts in a temporary directory (not c
 Reproduction steps: download and unpack WiX → produce the build directory with
 `flutter build windows --release` →
 `harvest-machine.ps1 -SourceDir <build dir> -OutFile payload.wxs` →
-compile both `.wxs` files with `candle -arch x64` → `light -ext WixUIExtension -cultures:<culture> -loc <culture>.wxl
+compile both `.wxs` files with `candle -arch x64` (or `-arch arm64` on an ARM64 machine) → `light -ext WixUIExtension -cultures:<culture> -loc <culture>.wxl
 -sice:ICE60 -sice:ICE61` → `msiexec /a` (extraction check) / `/i /qn` (needs elevation) / `/x /qn`.
 
 WiX download: <https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip>.

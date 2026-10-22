@@ -188,7 +188,7 @@ flutter build windows --<mode>
   → 签名主程序（NSIS 也要求如此：MSI 会把文件内容嵌进 CAB）
   → harvest(构建输出)                     → payload.wxs
   → 每个语言渲染 main.wxs（带 LCID）+ <culture>.wxl
-  → candle -arch x64 payload.wxs          → payload.wixobj（各语言共用）
+  → candle -arch <x64|arm64> payload.wxs  → payload.wixobj（各语言共用）
   → 每个语言 candle main.wxs              → <culture>-main.wixobj
   → 每个语言 light -ext WixUIExtension -cultures:<locale> -loc <culture>.wxl
           -sice:ICE60 -sice:ICE61 -pdbout <临时目录>
@@ -298,8 +298,9 @@ pacor-core:
 
 - 不传 `-arch x64` 时 candle 产出 **Intel(32 位) 包**：实测 ARP 落在
   `HKLM\Software\WOW6432Node\...\Uninstall`（而不是原生视图）；把组件装进 64 位目录还会触发
-  ICE80（已知规则，本方案固定 `-arch x64` 以规避）。载荷是 64 位 Flutter 应用，因此固定
-  `-arch x64` + `Package/@Platform="x64"`；
+  ICE80（已知规则，本方案始终传 `-arch` 以规避）。取值就是载荷自身的架构——candle 认的
+  `x64` / `arm64`，与产物名、构建目录同源的那个 `Arch`——因此 ARM64 构建产出的包会被 Windows
+  登记为 ARM64，而不是被当成 32 位-on-ARM 去安装和修复的 Intel 包；
 - per-machine 安装**需要管理员**：非提升会话下 `msiexec /i /qn` 失败于
   `InstallFinalize`，日志给出 `Error 1925: You do not have sufficient privileges to complete this
   installation for all users of the machine`（实测，退出码 1603，回滚干净）。
@@ -379,7 +380,7 @@ per-user 安装会额外引入两条硬约束，**本方案因只做 per-machine
 | `ARPNOMODIFY` 与 WixUI 冲突 | `LGHT0091 Duplicate symbol 'Property:ARPNOMODIFY'` |
 | `ARPINSTALLLOCATION=[INSTALLDIR]` 非法 | `CNDL1077` |
 | 多语言 `-loc` 冲突 | `-cultures:en-us;zh-cn` + 两份 `.wxl` → `LGHT0100` |
-| 32 位/64 位包差异 | 默认 Intel 包 ARP 在 `WOW6432Node`；`-arch x64` 后在原生视图（`Template=x64;…`） |
+| 32 位/64 位包差异 | 默认 Intel 包 ARP 在 `WOW6432Node`；传 `-arch`（x64/arm64）后在原生视图（`Template=x64;…`） |
 | light 先出产物后报 ICE | ICE 报错运行中 `msi` 仍存在，退出码 204 |
 | `/a` 解包可用于校验 | 两个语言的包各 12 个文件，与构建目录逐一对齐 |
 | per-machine 需要提权 | 非提升会话 `Error 1925`，退出码 1603，回滚干净 |
@@ -420,7 +421,7 @@ per-user 安装会额外引入两条硬约束，**本方案因只做 per-machine
 
 复现步骤：下载并解压 WiX → 用 `flutter build windows --release` 产出构建目录 →
 `harvest-machine.ps1 -SourceDir <构建目录> -OutFile payload.wxs` →
-`candle -arch x64` 编译两个 `.wxs` → `light -ext WixUIExtension -cultures:<culture> -loc <culture>.wxl
+`candle -arch x64`（ARM64 机器上为 `-arch arm64`）编译两个 `.wxs` → `light -ext WixUIExtension -cultures:<culture> -loc <culture>.wxl
 -sice:ICE60 -sice:ICE61` → `msiexec /a`（解包校验）/ `/i /qn`（需提权）/ `/x /qn`。
 
 WiX 下载地址：<https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip>。

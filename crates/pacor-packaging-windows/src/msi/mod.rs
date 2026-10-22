@@ -15,7 +15,7 @@
 //! 1. fetch the pinned WiX toolset and its templates into the cache;
 //! 2. harvest the build output into `payload.wxs` (deterministic component GUIDs);
 //! 3. render `main.wxs` and one `.wxl` per locale;
-//! 4. `candle -arch x64` compiles the sources, `light` links one MSI per locale;
+//! 4. `candle -arch <x64|arm64>` compiles the sources, `light` links one MSI per locale;
 //! 5. `light`'s exit code decides success — it writes the MSI *before* reporting
 //!    ICE errors, so a file existing proves nothing.
 
@@ -62,6 +62,32 @@ pub(super) struct MsiBuilder<'a> {
     executable_name: &'a str,
 }
 
+/// The complete argument vector of one `candle` invocation.
+///
+/// Split out of [`MsiBuilder::compile_source`] so a test can assert it whole: `-arch` decides
+/// whether the package is registered as a 64-bit ARM or an Intel one, and a wrong value does
+/// not fail the build — it produces an installer that installs and repairs against the wrong
+/// platform. `-out` is given a file name because that is the documented form for a single
+/// input, and the `-d` variables are what keep machine-specific paths out of the generated
+/// `payload.wxs`.
+fn candle_args(
+    arch: &Arch,
+    temp_dir: &Path,
+    source: &Path,
+    object_name: &str,
+    build_output_dir: &Path,
+    icon_path: &Path,
+) -> Vec<std::ffi::OsString> {
+    let mut args = command_args!(capacity = 12, "-nologo", "-arch", arch.as_str());
+    args.push("-ext".into());
+    args.push("WixUIExtension".into());
+    args.push(format!("-dSourceDir={}", build_output_dir.display()).into());
+    args.push(format!("-dIconPath={}", icon_path.display()).into());
+    args.push("-out".into());
+    args.push(temp_dir.join(object_name).into_os_string());
+    args.push(source.as_os_str().into());
+    args
+}
 impl<'a> MsiBuilder<'a> {
     pub(super) fn new(
         app_config: &'a AppConfig,
@@ -177,7 +203,7 @@ impl<'a> MsiBuilder<'a> {
         Ok(artifacts)
     }
 
-    /// `candle -arch x64`: compiles one source file into one object.
+    /// `candle -arch <x64|arm64>`: compiles one source file into one object.
     ///
     /// `-out` is given a file name because that is the documented form for a
     /// single input, and the `-d` variables are what keep machine-specific paths
@@ -191,14 +217,14 @@ impl<'a> MsiBuilder<'a> {
         build_output_dir: &Path,
         command_output_mode: &CommandOutputMode,
     ) -> Result<()> {
-        let mut args = command_args!(capacity = 12, "-nologo", "-arch", "x64");
-        args.push("-ext".into());
-        args.push("WixUIExtension".into());
-        args.push(format!("-dSourceDir={}", build_output_dir.display()).into());
-        args.push(format!("-dIconPath={}", self.icon_path.display()).into());
-        args.push("-out".into());
-        args.push(temp_dir.join(object_name).into_os_string());
-        args.push(source.as_os_str().into());
+        let args = candle_args(
+            self.arch,
+            temp_dir,
+            source,
+            object_name,
+            build_output_dir,
+            self.icon_path,
+        );
 
         tracing::info!(source = %source.display(), "Compiling the MSI sources with candle");
         execute_command(
@@ -291,6 +317,49 @@ mod tests {
     use std::fs;
 
     use crate::test_support::{app_config, demo_project, require_wix_toolset, write_minimal_icon};
+
+    /// `candle` was told `-arch x64` whatever the payload was, so an MSI for an ARM64 build
+    /// declared Intel64: Windows then installs it as a 32-bit-on-ARM package and repairs it
+    /// from the wrong source, instead of the build failing.
+    #[test]
+    fn candle_is_told_the_architecture_of_the_payload() {
+        use pacor_core::core::arch::Arch;
+
+        let temp_dir = Path::new("temp");
+        let source = Path::new("payload.wxs");
+        let build_output_dir = Path::new("build/windows/arm64/runner/Release");
+        let icon_path = Path::new("app_icon.ico");
+        let object_path = temp_dir.join("payload.wixobj");
+
+        let args = candle_args(
+            &Arch::ARM64,
+            temp_dir,
+            source,
+            "payload.wixobj",
+            build_output_dir,
+            icon_path,
+        );
+        let rendered: Vec<String> = args
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(
+            rendered,
+            vec![
+                "-nologo".to_string(),
+                "-arch".to_string(),
+                "arm64".to_string(),
+                "-ext".to_string(),
+                "WixUIExtension".to_string(),
+                format!("-dSourceDir={}", build_output_dir.display()),
+                format!("-dIconPath={}", icon_path.display()),
+                "-out".to_string(),
+                object_path.display().to_string(),
+                source.display().to_string(),
+            ]
+        );
+    }
 
     #[test]
     fn the_cache_directory_carries_the_pinned_tag() {
