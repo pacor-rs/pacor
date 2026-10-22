@@ -99,6 +99,30 @@ pub(super) struct NSISGenerator<'a> {
     pub(super) installer_output_dir: &'a Path,
 }
 
+/// Escape a value for a quoted NSIS string.
+///
+/// NSIS has no quoting escape of its own: a double quote ends the string wherever it
+/// appears, and a dollar sign starts a variable reference or an escape sequence. A display
+/// name like `My "Pro" App` therefore ended the string early and `makensis` rejected the
+/// script, while a publisher containing a dollar sign expanded to nothing — or to a
+/// variable of that name, if one existed.
+fn nsis_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            // The only way to keep either character literal is NSIS' own escape.
+            '$' => escaped.push_str("$$"),
+            '"' => {
+                escaped.push('$');
+                escaped.push('\\');
+                escaped.push('"');
+            }
+            _ => escaped.push(character),
+        }
+    }
+    escaped
+}
+
 impl<'a> NSISGenerator<'a> {
     /// Generates all language-specific content for the NSIS script in a single pass.
     ///
@@ -164,10 +188,13 @@ impl<'a> NSISGenerator<'a> {
             version_info_lines.push(format!("\n; {} Version Information", lang_code));
 
             let version_info_keys = [
-                ("ProductName", metadata.name().unwrap_or(self.app_name)),
-                ("ProductVersion", self.version),
-                ("CompanyName", metadata.publisher()),
-                ("FileVersion", self.version),
+                (
+                    "ProductName",
+                    nsis_escape(metadata.name().unwrap_or(self.app_name)),
+                ),
+                ("ProductVersion", nsis_escape(self.version)),
+                ("CompanyName", nsis_escape(metadata.publisher())),
+                ("FileVersion", nsis_escape(self.version)),
             ];
 
             for (key, value) in version_info_keys {
@@ -180,13 +207,13 @@ impl<'a> NSISGenerator<'a> {
             version_info_lines.push(format!(
                 "VIAddVersionKey /LANG=${{{}}} \"FileDescription\" \"{}\"",
                 nsis_lang_const,
-                metadata.description().unwrap_or(self.default_description)
+                nsis_escape(metadata.description().unwrap_or(self.default_description))
             ));
 
             version_info_lines.push(format!(
                 "VIAddVersionKey /LANG=${{{}}} \"LegalCopyright\" \"{}\"",
                 nsis_lang_const,
-                metadata.copyright().unwrap_or(self.default_legal_copyright)
+                nsis_escape(metadata.copyright().unwrap_or(self.default_legal_copyright))
             ));
 
             // 4. Localized string definitions
@@ -195,15 +222,17 @@ impl<'a> NSISGenerator<'a> {
             localized_strings.push(format!(
                 "LangString APP_DISPLAY_NAME ${{{}}} \"{}\"",
                 nsis_lang_const,
-                metadata
-                    .display_name()
-                    .unwrap_or(metadata.name().unwrap_or(self.app_name))
+                nsis_escape(
+                    metadata
+                        .display_name()
+                        .unwrap_or(metadata.name().unwrap_or(self.app_name))
+                )
             ));
 
             localized_strings.push(format!(
                 "LangString APP_PUBLISHER ${{{}}} \"{}\"\n",
                 nsis_lang_const,
-                metadata.publisher()
+                nsis_escape(metadata.publisher())
             ));
         }
 
@@ -234,7 +263,7 @@ impl<'a> NSISGenerator<'a> {
             .join("languages")
             .join(format!("{lang_code}.nsh"));
 
-        format!("!include \"{}\"", path.display())
+        format!("!include \"{}\"", nsis_escape(&path.display().to_string()))
     }
 
     /// Renders the NSIS script by replacing placeholders in the template.
@@ -268,15 +297,28 @@ impl<'a> NSISGenerator<'a> {
         debug!("  BUILD_OUTPUT_DIR: {}", build_output_dir_str);
         debug!("  INSTALLER_OUTPUT_PATH: {}", installer_output_path_str);
 
+        // Each of these is substituted inside a quoted `!define` in the template, so it is
+        // escaped once here rather than at every use. They stay owned because the map
+        // borrows from them.
+        let escaped = [
+            ("APP_NAME", nsis_escape(self.app_name)),
+            ("APP_VERSION", nsis_escape(self.version)),
+            ("APP_URL", nsis_escape(self.app_config.url())),
+            ("APP_EXECUTABLE", nsis_escape(self.executable_name)),
+            ("APP_ICON_PATH", nsis_escape(&icon_path_str)),
+            ("BUILD_OUTPUT_DIR", nsis_escape(&build_output_dir_str)),
+            (
+                "INSTALLER_OUTPUT_PATH",
+                nsis_escape(&installer_output_path_str),
+            ),
+        ];
+
         // Build replacement map for template rendering
-        let replacements = HashMap::from([
-            ("APP_NAME", self.app_name),
-            ("APP_VERSION", self.version),
-            ("APP_URL", self.app_config.url()),
-            ("APP_EXECUTABLE", self.executable_name),
-            ("APP_ICON_PATH", icon_path_str.as_str()),
-            ("BUILD_OUTPUT_DIR", build_output_dir_str.as_str()),
-            ("INSTALLER_OUTPUT_PATH", installer_output_path_str.as_str()),
+        let mut replacements: HashMap<&str, &str> = escaped
+            .iter()
+            .map(|(key, value)| (*key, value.as_str()))
+            .collect();
+        replacements.extend([
             ("LANGUAGE_MACROS", lang_content.language_macros.as_str()),
             ("LANGUAGE_INCLUDE", lang_content.language_includes.as_str()),
             ("VERSION_INFO", lang_content.version_info_blocks.as_str()),
@@ -433,6 +475,47 @@ mod tests {
         }
     }
 
+    /// NSIS has no quoting escape of its own: an unescaped double quote ends the string
+    /// wherever it appears, and a bare dollar sign starts a variable reference.
+    #[test]
+    fn nsis_escape_keeps_quotes_and_dollars_literal() {
+        assert_eq!(
+            nsis_escape(r#"ACME "Pro" Tools"#),
+            r#"ACME $\"Pro$\" Tools"#
+        );
+        assert_eq!(nsis_escape("ACME $Co"), "ACME $$Co");
+        assert_eq!(nsis_escape("ACME"), "ACME");
+    }
+
+    /// The metadata reaches three different quoted contexts (LangString,
+    /// VIAddVersionKey and the `!define` block), so it is escaped once in the generator
+    /// rather than by whoever builds each line.
+    #[test]
+    fn metadata_is_escaped_before_it_reaches_the_script() {
+        let mut config = english_config();
+        config.i18n.insert(
+            Locale::EnUs,
+            pacor_core::config::AppMetadata::new(
+                Some("My \"Pro\" App"),
+                Some("My \"Pro\" App"),
+                Some("A $5 tool"),
+                "ACME $Co",
+                Some("Copyright (C) 2025 ACME $Co."),
+            ),
+        );
+
+        let script = generator(&config, Path::new("/cache/nsis/v1"))
+            .render_nsis_script("{{LANGUAGE_STRINGS}}\n{{VERSION_INFO}}\n{{APP_NAME}}")
+            .unwrap();
+
+        assert!(script.contains(r#"My $\"Pro$\" App"#), "{script}");
+        assert!(script.contains("ACME $$Co"), "{script}");
+        assert!(script.contains("A $$5 tool"), "{script}");
+        assert!(
+            !script.contains("My \"Pro\" App"),
+            "the unescaped form has to be gone: {script}"
+        );
+    }
     /// Renders a stand-in for the pinned template that uses every placeholder
     /// the real one uses, so a missing replacement fails here rather than at
     /// `makensis` time.
