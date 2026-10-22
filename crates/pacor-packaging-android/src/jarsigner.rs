@@ -37,9 +37,14 @@ use super::{
 /// How `jarsigner` is named on this host.
 const JARSIGNER: &str = "jarsigner";
 
-/// Digest and signature algorithms Play accepts, pinned so an old JDK default
-/// (SHA-1) cannot silently produce a rejected bundle.
-const SIG_ALG: &str = "SHA256withRSA";
+/// Digest algorithm Play accepts, pinned so an old JDK default (SHA-1) cannot
+/// silently produce a rejected bundle.
+///
+/// The *signature* algorithm is deliberately not pinned: `jarsigner` derives it from
+/// the private key (SHA256withRSA for RSA, SHA256withECDSA for EC) since JDK 9, and
+/// passing `-sigalg SHA256withRSA` made every EC keystore fail with "signature
+/// algorithm SHA256withRSA not compatible with key" — an error that names neither
+/// the keystore nor the key type the user actually has.
 const DIGEST_ALG: &str = "SHA-256";
 
 /// Resolved signing configuration: a tool plus the keystore it uses.
@@ -144,15 +149,13 @@ impl BundleSigner {
         );
 
         let mut args = command_args!(
-            capacity = 12,
+            capacity = 10,
             "-keystore",
             &self.keystore,
             store_pass.0.as_str(),
             store_pass.1.as_str(),
             key_pass.0.as_str(),
             key_pass.1.as_str(),
-            "-sigalg",
-            SIG_ALG,
             "-digestalg",
             DIGEST_ALG,
         );

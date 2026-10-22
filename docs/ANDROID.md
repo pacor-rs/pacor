@@ -273,14 +273,17 @@ The signing command:
 
 ```
 jarsigner -keystore <keystore> -storepass[:env] <password> -keypass[:env] <password> \
-    -sigalg SHA256withRSA -digestalg SHA-256 <aab> <alias>
+    -digestalg SHA-256 <aab> <alias>
 ```
 
 A password that comes from an environment variable uses
 `-storepass:env PACOR_ANDROID_KEYSTORE_PASSWORD` / `-keypass:env PACOR_ANDROID_KEY_PASSWORD`
 (measured as working with the JDK 21 `jarsigner`), while one from the configuration file
-is passed literally. `-sigalg`/`-digestalg` are pinned to SHA-256 so that the SHA-1 older
-JDKs default to does not make Play reject the bundle.
+is passed literally. `-digestalg` is pinned to SHA-256 so that the SHA-1 older JDKs default
+to does not make Play reject the bundle. The signature algorithm is **not** pinned:
+`jarsigner` derives it from the private key (SHA256withRSA for RSA, SHA256withECDSA for
+EC), and naming SHA256withRSA explicitly failed every EC keystore with "signature
+algorithm SHA256withRSA not compatible with key".
 
 **Any JAR signature Gradle left behind is stripped before signing.** `flutter build appbundle`
 signs the AAB with the project's Gradle signing configuration (the **debug** keystore when
