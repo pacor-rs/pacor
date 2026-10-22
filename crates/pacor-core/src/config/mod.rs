@@ -363,6 +363,32 @@ mod tests {
         assert!(error.contains("main category"), "{error}");
     }
 
+    /// `categories = []` is the same defect as a list of additional categories only: no
+    /// main category means no menu the entry can appear in. It used to validate, and the
+    /// installed package then carried a desktop file no menu lists.
+    #[test]
+    fn an_empty_category_list_fails_validation() {
+        let config: PacorConfig = toml::from_str(
+            r#"
+            [app]
+            default_locale = "en-US"
+            url = "https://example.com"
+            [app.i18n.en-US]
+            publisher = "p"
+            [platforms.linux.desktop]
+            categories = []
+            "#,
+        )
+        .unwrap();
+
+        let error = config.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("platforms.linux.desktop.categories"),
+            "{error}"
+        );
+        assert!(error.contains("`Categories` is empty"), "{error}");
+    }
+
     #[test]
     fn a_paired_desktop_entry_passes_validation() {
         let config: PacorConfig = toml::from_str(
