@@ -1,11 +1,15 @@
 //! macOS localization: `InfoPlist.strings` rendering and installation into an
-//! already-built `.app` bundle.
+//! already-built `.app` bundle, plus the bundle metadata written into the same
+//! `Info.plist`.
 
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 
-use pacor_core::config::{AppConfig, AppMetadata};
+use pacor_core::config::{AppConfig, AppMetadata, MacOSBuildConfig};
 use pacor_core::utils::fs::ensure_directory_exists;
 
 use crate::plist::Plist;
@@ -70,25 +74,83 @@ pub fn add_localization_resources(app_bundle_path: &Path, app_config: &AppConfig
     }
 
     let locale_count = localizations.len();
-    let plist_path = contents_dir.join("Info.plist");
-    let contents = fs::read_to_string(&plist_path).with_context(|| {
-        format!(
-            "failed to read {} (pacor edits an XML `Info.plist`; if the build wrote a binary \
-             one, convert it first with `plutil -convert xml1 {}`)",
-            plist_path.display(),
-            plist_path.display()
-        )
-    })?;
-    let mut plist = Plist::parse(&contents);
+    let plist_path = info_plist_path(app_bundle_path);
+    let mut plist = read_info_plist(&plist_path)?;
     plist.insert("CFBundleLocalizations", localizations)?;
     plist.insert(
         "CFBundleDevelopmentRegion",
         app_config.default_locale().as_apple(),
     )?;
-    fs::write(&plist_path, plist.to_string())
-        .with_context(|| format!("failed to write {}", plist_path.display()))?;
+    write_info_plist(&plist_path, &plist)?;
 
     debug!(locales = locale_count, "Localization resources installed");
+    Ok(())
+}
+
+/// Path of the built bundle's `Info.plist`.
+fn info_plist_path(app_bundle_path: &Path) -> PathBuf {
+    app_bundle_path.join("Contents").join("Info.plist")
+}
+
+/// Read the built `Info.plist`.
+fn read_info_plist(path: &Path) -> Result<Plist> {
+    let contents = fs::read_to_string(path).with_context(|| {
+        format!(
+            "failed to read {} (pacor edits an XML `Info.plist`; if the build wrote a binary \
+             one, convert it first with `plutil -convert xml1 {}`)",
+            path.display(),
+            path.display()
+        )
+    })?;
+    Ok(Plist::parse(&contents))
+}
+
+/// Write the built `Info.plist` back.
+fn write_info_plist(path: &Path, plist: &Plist) -> Result<()> {
+    fs::write(path, plist.to_string())
+        .with_context(|| format!("failed to write {}", path.display()))
+}
+
+/// Write the bundle identity from `pacor.toml` into the built `Info.plist`.
+///
+/// Flutter's macOS template points `CFBundleIdentifier` at Xcode's
+/// `PRODUCT_BUNDLE_IDENTIFIER` and derives `LSMinimumSystemVersion` from the deployment
+/// target, so without this the matching `pacor.toml` settings were parsed and then ignored:
+/// the app shipped with the identifier and the minimum version Flutter chose, and with no
+/// App Store category at all. A key whose setting is absent is left exactly as the build
+/// wrote it.
+pub fn write_bundle_metadata(
+    app_bundle_path: &Path,
+    macos_config: &MacOSBuildConfig,
+) -> Result<()> {
+    let settings = [
+        (
+            "CFBundleIdentifier",
+            macos_config.bundle_identifier.as_deref(),
+        ),
+        (
+            "LSMinimumSystemVersion",
+            macos_config.minimum_system_version.as_deref(),
+        ),
+        (
+            "LSApplicationCategoryType",
+            macos_config.category.as_deref(),
+        ),
+    ];
+    if settings.iter().all(|(_, value)| value.is_none()) {
+        return Ok(());
+    }
+
+    let plist_path = info_plist_path(app_bundle_path);
+    let mut plist = read_info_plist(&plist_path)?;
+    for (key, value) in settings {
+        if let Some(value) = value {
+            plist.insert(key, value)?;
+        }
+    }
+    write_info_plist(&plist_path, &plist)?;
+
+    debug!(bundle = %app_bundle_path.display(), "Bundle metadata written to Info.plist");
     Ok(())
 }
 
@@ -189,5 +251,60 @@ mod tests {
             fs::read_to_string(bundle.join("Contents/Resources/zh-Hans.lproj/InfoPlist.strings"))
                 .unwrap();
         assert!(strings.contains("CFBundleName = \"演示\";"), "{strings}");
+    }
+
+    #[test]
+    fn the_configured_bundle_metadata_is_written_into_the_plist() {
+        let temp = TempDir::new().unwrap();
+        let bundle = bundle(&temp);
+        let macos_config = MacOSBuildConfig {
+            bundle_identifier: Some("com.example.demo".to_string()),
+            minimum_system_version: Some("11.0".to_string()),
+            category: Some("public.app-category.developer-tools".to_string()),
+            ..Default::default()
+        };
+
+        write_bundle_metadata(&bundle, &macos_config).unwrap();
+
+        let plist = fs::read_to_string(bundle.join("Contents/Info.plist")).unwrap();
+        assert!(plist.contains("<key>CFBundleIdentifier</key>"), "{plist}");
+        assert!(
+            plist.contains("<string>com.example.demo</string>"),
+            "{plist}"
+        );
+        assert!(
+            plist.contains("<key>LSMinimumSystemVersion</key>"),
+            "{plist}"
+        );
+        assert!(plist.contains("<string>11.0</string>"), "{plist}");
+        assert!(
+            plist.contains("<key>LSApplicationCategoryType</key>"),
+            "{plist}"
+        );
+        assert!(
+            plist.contains("<string>public.app-category.developer-tools</string>"),
+            "{plist}"
+        );
+        // The keys the build already wrote are not this function's business.
+        assert!(plist.contains("<key>CFBundleName</key>"), "{plist}");
+    }
+
+    /// `Default` sets the minimum system version and the category, so "nothing configured"
+    /// has to be spelled out rather than taken from `Default`.
+    #[test]
+    fn a_config_without_bundle_metadata_leaves_the_plist_alone() {
+        let temp = TempDir::new().unwrap();
+        let bundle = bundle(&temp);
+        let macos_config = MacOSBuildConfig {
+            bundle_identifier: None,
+            minimum_system_version: None,
+            category: None,
+            ..Default::default()
+        };
+
+        write_bundle_metadata(&bundle, &macos_config).unwrap();
+
+        let plist = fs::read_to_string(bundle.join("Contents/Info.plist")).unwrap();
+        assert_eq!(plist, INFO_PLIST, "nothing configured, nothing to write");
     }
 }
