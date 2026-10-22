@@ -161,12 +161,10 @@ impl Harvester<'_> {
         }
 
         for (path, name, relative_path) in subdirectories {
-            let directory_id = self.component(&relative_path);
-            out.push_str(&format!(
-                "{padding}<Directory Id=\"{directory_id}\" Name=\"{}\">\n",
-                xml_escape(&name)
-            ));
-
+            // The subtree is rendered before anything is written: the decision to emit
+            // the element at all depends on whether it has content, and opening it
+            // first left an element that was never closed — not XML, which is why
+            // `candle` refused every package whose build output held an empty directory.
             let mut child = String::new();
             self.directory(&path, &relative_path, indent + 1, &mut child)?;
 
@@ -175,10 +173,16 @@ impl Harvester<'_> {
                 if !contains_file(&path)? {
                     self.empty_directories.push(relative_path.clone());
                 }
-                // Nothing to install, so the element is not emitted at all.
+                // Nothing to install, so nothing to install into: an empty element
+                // would describe a directory MSI creates on demand anyway.
                 continue;
             }
 
+            let directory_id = self.component(&relative_path);
+            out.push_str(&format!(
+                "{padding}<Directory Id=\"{directory_id}\" Name=\"{}\">\n",
+                xml_escape(&name)
+            ));
             out.push_str(&child);
             out.push_str(&format!("{padding}</Directory>\n"));
         }
@@ -400,7 +404,35 @@ mod tests {
         let xml = harvest(temp.path(), PRODUCT).unwrap();
 
         assert!(!xml.contains("data/empty"), "{xml}");
-        assert!(!xml.contains("<Directory Id=\"f_data__empty"), "{xml}");
+        assert!(!xml.contains("<Directory Id=\"f_data_empty"), "{xml}");
+    }
+
+    /// The element used to be opened before the subtree was rendered, and the branch
+    /// that skips an empty directory left it unterminated — which is not XML, so
+    /// `candle` rejected the whole file. Every opening tag now has its closing tag.
+    #[test]
+    fn an_empty_directory_does_not_leave_an_unclosed_element() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join("data/empty")).unwrap();
+        fs::create_dir_all(temp.path().join("data/nested/also-empty")).unwrap();
+        fs::create_dir_all(temp.path().join("data/flutter_assets")).unwrap();
+        fs::write(temp.path().join("my_app.exe"), "exe").unwrap();
+        fs::write(temp.path().join("data/flutter_assets/app.so"), "so").unwrap();
+
+        let xml = harvest(temp.path(), PRODUCT).unwrap();
+
+        assert_eq!(
+            xml.match_indices("<Directory ").count(),
+            xml.match_indices("</Directory>").count(),
+            "an unclosed element breaks the file: {xml}"
+        );
+        for empty in ["f_data_empty", "f_data_nested", "f_data_nested_also-empty"] {
+            assert!(
+                !xml.contains(empty),
+                "{empty} has nothing to install: {xml}"
+            );
+        }
+        assert!(xml.contains("f_data_flutter_assets"), "{xml}");
     }
 
     #[test]
