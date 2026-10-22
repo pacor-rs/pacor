@@ -4,9 +4,10 @@
 //! format, so the AppImage and the DEB agree on the icon set.
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use pacor_core::utils::archive::extract_zip;
 use pacor_core::utils::downloader::download_file;
@@ -45,7 +46,7 @@ pub(crate) fn search_icons(
             let default_dir = tools_dir
                 .join("icons")
                 .join(pacor_core::tools::TEMPLATE_REF);
-            if !default_dir.exists() {
+            if !holds_entries(&default_dir) {
                 download_default_icons(&default_dir)?;
             }
             default_dir
@@ -94,16 +95,61 @@ pub(crate) fn resolve_primary_icon(icons: &BTreeMap<u32, Icon>) -> Result<&Icon>
         })
 }
 
+/// Whether `directory` holds at least one entry.
+///
+/// The default icon set is a directory, so "cached" cannot be `exists()`: the directory used to
+/// be created before the download, and a transfer that failed left an empty one behind that
+/// satisfied every later check.
+fn holds_entries(directory: &Path) -> bool {
+    fs::read_dir(directory)
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false)
+}
 /// Download and unpack the default icon set into `directory`.
 fn download_default_icons(directory: &Path) -> Result<()> {
     let url = default_icons_url();
     debug!(url = %url, "Downloading default icons");
 
-    ensure_directory_exists(directory)?;
+    // A directory that exists but holds nothing is a download that never finished, left by a
+    // version that created it first. `remove_dir` refuses a populated directory, so a real icon
+    // set is never deleted here.
+    if directory.exists() {
+        fs::remove_dir(directory).with_context(|| {
+            format!(
+                "failed to clear the empty icon cache at {}; remove it and build again",
+                directory.display()
+            )
+        })?;
+    }
+
     let data = download_file(&url)?;
-    extract_zip(&data, directory)?;
+    unpack_icons(&data, directory)?;
 
     info!(directory = %directory.display(), "Default icons downloaded");
+    Ok(())
+}
+
+/// Unpack an icon archive into `directory` through a temporary sibling.
+///
+/// Extracting straight into the destination made one failed download permanent: the
+/// half-written directory satisfied the cache check on the next run, the download was skipped,
+/// and the build failed with "no icons found; set `platforms.linux.icon_directory`" — advice
+/// pointing at the configuration while the real cause was a transfer that never completed.
+fn unpack_icons(data: &[u8], directory: &Path) -> Result<()> {
+    let parent = directory
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("{} has no parent directory", directory.display()))?;
+    ensure_directory_exists(parent)?;
+
+    let staging = tempfile::TempDir::with_prefix_in("pacor-icons", parent)?;
+    extract_zip(data, staging.path())?;
+
+    // The staging directory is a sibling, so the rename stays on one filesystem and either
+    // happens completely or not at all.
+    let staged = staging.keep();
+    fs::rename(&staged, directory)
+        .with_context(|| format!("failed to move the icon set into {}", directory.display()))?;
+
     Ok(())
 }
 
@@ -117,6 +163,37 @@ mod tests {
         std::fs::write(dir.join(name), "icon").unwrap();
     }
 
+    /// A failed download must leave nothing behind. The destination used to be created before
+    /// the transfer, so the next run found a directory that existed, skipped the download and
+    /// reported "no icons found; set `platforms.linux.icon_directory`" for good.
+    #[test]
+    fn a_failed_icon_download_leaves_no_cache_behind() {
+        let temp = TempDir::new().unwrap();
+        let directory = temp.path().join("icons").join("tag");
+        std::fs::create_dir_all(directory.parent().unwrap()).unwrap();
+
+        let error = unpack_icons(b"not an archive", &directory).unwrap_err();
+
+        assert!(!directory.exists(), "{error}");
+        assert!(
+            !holds_entries(directory.parent().unwrap()),
+            "staging left behind"
+        );
+    }
+
+    /// A cache directory that exists but holds nothing is a download that never finished, from
+    /// a version that created it first; it must not count as cached.
+    #[test]
+    fn an_empty_cache_directory_is_not_cached() {
+        let temp = TempDir::new().unwrap();
+        let directory = temp.path().join("icons").join("tag");
+        std::fs::create_dir_all(&directory).unwrap();
+
+        assert!(!holds_entries(&directory));
+
+        write_icon(&directory, "32x32.png");
+        assert!(holds_entries(&directory));
+    }
     #[test]
     fn standard_icon_sizes_are_unique_and_ascending() {
         assert_eq!(STANDARD_ICON_SIZES.len(), 9);
