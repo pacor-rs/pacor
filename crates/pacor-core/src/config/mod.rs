@@ -255,7 +255,7 @@ impl PacorConfig {
             return Some("must be relative to the project root");
         }
 
-        let mut has_name = false;
+        let mut first_component: Option<&std::ffi::OsStr> = None;
         for component in path.components() {
             match component {
                 Component::Prefix(_) | Component::RootDir => {
@@ -263,12 +263,24 @@ impl PacorConfig {
                 }
                 Component::ParentDir => return Some("must not contain `..`"),
                 Component::CurDir => {}
-                Component::Normal(_) => has_name = true,
+                Component::Normal(name) => {
+                    first_component.get_or_insert(name);
+                }
             }
         }
 
-        if !has_name {
+        let Some(first_component) = first_component else {
             return Some("must not be the project root itself");
+        };
+
+        // `flutter clean` runs after every build and removes `build/` wholesale, so an
+        // artifact directory inside it is deleted by the run that produced it — the
+        // build then reports success with paths that no longer exist.
+        if first_component == std::ffi::OsStr::new("build") {
+            return Some(
+                "must not be inside Flutter's `build/` directory, which `flutter clean` removes \
+                 after every build",
+            );
         }
 
         None
@@ -476,6 +488,26 @@ mod tests {
 
             let error = config.validate().unwrap_err().to_string();
             assert!(error.contains("build.output_dir"), "{output_dir}: {error}");
+        }
+    }
+
+    /// The build runs `flutter clean` after packaging, which deletes `build/`. An output
+    /// directory inside it is therefore gone by the time the paths are printed.
+    #[test]
+    fn an_output_directory_inside_flutters_build_directory_is_rejected() {
+        for output_dir in [
+            "build",
+            "build/dist",
+            "./build/artifacts",
+            "build/nested/out",
+        ] {
+            let error = config_with_output_dir(output_dir)
+                .validate()
+                .unwrap_err()
+                .to_string();
+
+            assert!(error.contains("build.output_dir"), "{output_dir}: {error}");
+            assert!(error.contains("flutter clean"), "{output_dir}: {error}");
         }
     }
 

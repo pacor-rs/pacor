@@ -41,7 +41,8 @@ copyright = "版权所有 © 2025 我的公司。保留所有权利。"
 flutter_build_mode = "release"
 # Where the artifacts are written, relative to the project root. It has to stay
 # inside the project: `pacor clean` removes the directory wholesale, so an
-# absolute path, `..` and `.` are rejected.
+# absolute path, `..` and `.` are rejected. `build/` is rejected as well: the
+# `flutter clean` that runs after every build would delete the artifacts with it.
 output_dir = "dist"
 
 # ---------------------------------------------------------------------------
