@@ -72,7 +72,7 @@ pub struct Cli {
     #[arg(short, long, global = true, value_enum, default_value = "warn")]
     pub log_level: LogLevel,
 
-    /// Path to the configuration file (defaults to `pacor.toml` in the project root).
+    /// Path to the configuration file (defaults to the required `pacor.toml` in the project root).
     #[arg(
         short,
         long = "config",

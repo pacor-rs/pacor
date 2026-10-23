@@ -76,32 +76,49 @@ pub struct PacorConfig {
 
 impl PacorConfig {
     /// Load the configuration from `pacor.toml` in the Flutter project root.
+    ///
+    /// The file is required; `pacor init` writes it.
     pub fn load() -> Result<Self> {
         Self::load_from(None)
     }
 
     /// Load the configuration from an explicit path, or from the project root.
     ///
-    /// An explicitly named file must exist: falling back to the defaults hid a
-    /// mistyped `--config` behind a build that used none of the user's settings.
-    /// Only the default location is optional, and its absence is logged.
+    /// Both locations must contain a file. An explicit path was always required
+    /// because falling back to the defaults hid a mistyped `--config`; the
+    /// default location is required for the same reason, and because the
+    /// built-in defaults are demo values. A build that silently used them
+    /// packaged the wrong application identity.
     pub fn load_from(explicit_path: Option<&Path>) -> Result<Self> {
-        let config = match explicit_path {
-            Some(path) => Self::from_file(path)?,
+        match explicit_path {
+            Some(path) => Self::finish(Self::from_file(path)?),
             None => {
-                let path = project_root()?.join(CONFIG_FILE_NAME);
-                if path.exists() {
-                    Self::from_file(&path)?
-                } else {
-                    debug!(
-                        path = %path.display(),
-                        "No configuration file found; using the built-in defaults"
-                    );
-                    Self::default()
-                }
+                let root = project_root()?;
+                Self::load_from_project_root(&root)
             }
-        };
+        }
+    }
 
+    /// Read and validate the default configuration in `root`.
+    ///
+    /// Split from [`Self::load_from`] so the missing-file error can be tested
+    /// without changing the process working directory.
+    fn load_from_project_root(root: &Path) -> Result<Self> {
+        let path = root.join(CONFIG_FILE_NAME);
+        let config = Self::from_file(&path).map_err(|error| match error {
+            Error::Configuration(ConfigurationError::FileNotFound { .. }) => {
+                Error::Configuration(ConfigurationError::DefaultConfigNotFound {
+                    path: path.clone(),
+                })
+            }
+            other => other,
+        })?;
+
+        Self::finish(config)
+    }
+
+    /// Apply the environment overrides and validate a parsed configuration.
+    fn finish(config: Self) -> Result<Self> {
         let config = config.apply_environment()?;
         config.validate()?;
         Ok(config)
@@ -582,6 +599,40 @@ mod tests {
 
         assert!(error.contains("Configuration file not found"), "{error}");
         assert!(error.contains(&missing.display().to_string()), "{error}");
+    }
+
+    #[test]
+    fn a_missing_configuration_in_the_project_root_is_an_error() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let expected = temp.path().join(CONFIG_FILE_NAME);
+
+        let error = PacorConfig::load_from_project_root(temp.path())
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("Configuration file not found"), "{error}");
+        assert!(error.contains(&expected.display().to_string()), "{error}");
+        assert!(error.contains("pacor init"), "{error}");
+    }
+
+    #[test]
+    fn a_configuration_in_the_project_root_is_read() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            temp.path().join(CONFIG_FILE_NAME),
+            r#"
+            [app]
+            default_locale = "en-US"
+            url = "https://example.com"
+            [app.i18n.en-US]
+            publisher = "p"
+            "#,
+        )
+        .unwrap();
+
+        let config = PacorConfig::load_from_project_root(temp.path()).unwrap();
+
+        assert_eq!(config.app.url(), "https://example.com");
     }
 
     #[test]

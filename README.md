@@ -69,8 +69,8 @@ under the user configuration directory (default icon set, build templates,
 `linuxdeploy`, NSIS). Everything removed is fetched again on demand, so
 `--dry-run` lists it first.
 
-Global flags: `--config <path>` (defaults to `pacor.toml` in the project root; an
-explicitly named file must exist),
+Global flags: `--config <path>` (defaults to `pacor.toml` in the project root; the
+file is required and `pacor init` writes it),
 `--command-output <none|normal|verbose>` (external command output),
 `-l/--log-level <error|warn|info|debug>`.
 
@@ -81,8 +81,11 @@ runtime with a clear "tool X not found" error rather than being silently absent.
 
 ## Configuration
 
-`pacor.toml` lives in the Flutter project root. Run `pacor init` to generate a
-fully commented template, or read the reference template at
+`pacor.toml` lives in the Flutter project root and is read by `pacor build`,
+`pacor clean`, `pacor check` and `pacor config`. When it is missing, loading the
+configuration fails with the expected path and a pointer to `pacor init`. Run
+`pacor init` to generate a fully commented template, or read the reference
+template at
 [`crates/pacor-core/src/config/template.toml`](crates/pacor-core/src/config/template.toml).
 A trimmed example:
 

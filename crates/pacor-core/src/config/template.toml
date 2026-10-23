@@ -1,5 +1,8 @@
 # pacor.toml — single configuration file for every supported platform.
 #
+# This file is required: `pacor build`, `pacor clean`, `pacor check` and
+# `pacor config` stop with an error when it is missing. `pacor init` writes it.
+#
 # One file describes all platforms; `pacor build --target <linux|macos|windows|android>`
 # selects which section is consumed. Sections for other platforms are ignored,
 # so the same file can be committed and used on any host.
