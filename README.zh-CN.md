@@ -68,7 +68,8 @@ pacor build
 （默认图标集、构建模板、`linuxdeploy`、NSIS）。被清除的内容会在下次需要时
 重新下载，`--dry-run` 可先列出将要删除的内容。
 
-全局参数：`--config <path>`（默认项目根目录下的 `pacor.toml`；显式指定时必须存在）、
+全局参数：`--config <path>`（默认项目根目录下的 `pacor.toml`；该文件必须存在，
+可用 `pacor init` 生成）、
 `--command-output <none|normal|verbose>`（外部命令输出）、
 `-l/--log-level <error|warn|info|debug>`。
 
@@ -78,8 +79,9 @@ Linux、Windows 通用；只有 `--target` 选中的段会被使用。各平台�
 
 ## 配置
 
-`pacor.toml` 位于 Flutter 项目根目录。执行 `pacor init` 可生成完整注释模板，
-或查看参考模板
+`pacor.toml` 位于 Flutter 项目根目录，`pacor build`、`pacor clean`、`pacor check`
+与 `pacor config` 都会读取它。文件缺失时，配置加载会报错并给出期望的路径，
+同时提示可用 `pacor init` 生成。执行 `pacor init` 可生成完整注释模板，或查看参考模板
 [`crates/pacor-core/src/config/template.toml`](crates/pacor-core/src/config/template.toml)。
 精简示例：
 
