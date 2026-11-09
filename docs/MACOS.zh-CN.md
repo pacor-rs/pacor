@@ -8,7 +8,7 @@
 （它和其他目标一样接受 `--use-existing-flutter-build` 与 `--skip-cleanup`）。带完整注释的
 配置模板见
 [`crates/pacor-core/src/config/template.toml`](../crates/pacor-core/src/config/template.toml)，
-GitHub 镜像相关的环境变量见 [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md)。
+GitHub 镜像相关的环境变量见 [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.zh-CN.md)。
 
 > macOS 后端**只能在 macOS 上构建**。在开始构建之前，`validate` 会在 `PATH` 上查找
 > `flutter`、`xcodebuild` 和 `hdiutil`；配置了 `codesign_identity` 时再加 `codesign`，

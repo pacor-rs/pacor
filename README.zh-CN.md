@@ -143,7 +143,7 @@ dist/MyApp-1.0.0+1-arm64.app.tar.gz
 `platforms.macos` 里还有 bundle identifier、最低系统版本与 App Store 分类，pacor 会把它们写入
 构建产出的 `Info.plist`；`[app.i18n]` 则变成每种语言一个 `.lproj`。
 
-[`docs/MACOS.md`](docs/MACOS.md) 记录产物、配置项、签名与公证流程、缓存布局，以及这些布局能
+[`docs/MACOS.md`](docs/MACOS.zh-CN.md) 记录产物、配置项、签名与公证流程、缓存布局，以及这些布局能
 解释的失败。
 
 ## Windows 平台
