@@ -24,6 +24,36 @@ your Flutter build output into an installer for the target you choose:
 
 > Early-stage project: features and configuration may still change.
 
+## Scope
+
+Pacor runs `flutter build` and owns everything after it, including the order in
+which those steps have to happen:
+
+- **One `pacor.toml`, valid on every host.** Every platform section is parsed on
+  every host and every backend is compiled on every host, so a Windows-only
+  change is type-checked on Linux and one committed file serves every machine.
+- **Missing tools are provisioned, not assumed.** When the `makensis` on `PATH`
+  cannot be used, pacor falls back to a pinned archive checked against its
+  SHA-256; templates and the fallback icon set come from an immutable tag, and
+  mirrors cover networks that cannot reach GitHub.
+- **The signing order that makes the artifact valid.** The Windows executable is
+  signed before NSIS embeds it, an App Bundle is stripped of Gradle's signature
+  before `jarsigner` adds pacor's, and the macOS app is signed inside out before
+  the DMG is built.
+
+It is a packaging tool, not a release platform: artifacts are written to
+`output_dir` and nothing is uploaded.
+
+### When not to use pacor
+
+- **iOS.** Not supported; [`fastforge`](https://pub.dev/packages/fastforge)
+  covers IPA and store uploads.
+- **Publishing.** Play, the App Store and release pages are left to CI.
+- **RPM**, and anything else the status table marks "not yet".
+- **Cross-building installers.** Pacor drives the target platform's own
+  toolchain, so Windows installers are built on Windows. A CI matrix that only
+  packages may need nothing more than a workflow.
+
 ## Installation
 
 ```bash

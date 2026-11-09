@@ -24,6 +24,29 @@ Flutter 构建产物打包成安装包：
 
 > 项目处于前期阶段，功能和配置仍可能变化。
 
+## 适用范围
+
+Pacor 执行 `flutter build`，并接管它之后的所有步骤，包括这些步骤的先后顺序：
+
+- **一份 `pacor.toml`，在任意宿主上都有效。** 所有平台配置段在任意宿主上都会解析，
+  所有后端在任意宿主上都会编译，因此只涉及 Windows 的改动在 Linux 上也能被类型检查，
+  同一份文件提交一次即可在任意机器上使用。
+- **缺少工具时自行准备，而不是假定机器已装好。** `PATH` 里的 NSIS 不可用时会回退到
+  固定归档并校验 SHA-256；模板与兜底图标来自不可变的标签；无法访问 GitHub 的网络
+  可配置镜像。
+- **让产物有效的签名顺序。** Windows 主程序先签名、再由 NSIS 嵌入；AAB 先剥离 Gradle
+  签名、再由 `jarsigner` 追加 pacor 的签名；macOS 的 `.app` 由内向外签完，才构建 DMG。
+
+它是打包工具，不是发布平台：产物写入 `output_dir`，不上传任何地方。
+
+### 什么情况下不要用 pacor
+
+- **iOS**：不支持；IPA 与商店上传可用 [`fastforge`](https://pub.dev/packages/fastforge)。
+- **发布**：Play、App Store、Release 页面交给 CI。
+- **RPM**，以及状态表中标为「尚未实现」的格式。
+- **交叉构建安装包**：pacor 调用目标平台自己的工具链，Windows 安装包在 Windows 上构建。
+  如果 CI 只需要打包，一个 workflow 可能就足够了。
+
 ## 安装
 
 ```bash
